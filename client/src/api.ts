@@ -4,12 +4,14 @@ import type {
   LibrarySummary,
   LibraryTrack,
   MatchResult,
+  Me,
   Playlist,
   PlaylistImportResult,
   PlaylistInfo,
   PlaylistTrack,
   Preference,
   ScanStatus,
+  UserAccount,
   XmlImportResult,
 } from './types';
 
@@ -24,27 +26,61 @@ export class ApiError extends Error {
   }
 }
 
+/** Fired when any API call answers 401: the session died (expired, signed out
+ * elsewhere, account disabled) and the app should flip back to the sign-in
+ * screen. Sign-in's own 401 (wrong password) stays a normal form error. */
+export const SIGNED_OUT_EVENT = 'rm:signed-out';
+
+async function throwApiError(response: Response, path: string): Promise<never> {
+  let code = 'UNKNOWN';
+  let message = `Request failed (${response.status})`;
+  try {
+    const detail = (await response.json()).detail;
+    if (detail?.code) code = detail.code;
+    if (detail?.message) message = detail.message;
+  } catch {
+    // non-JSON error body: keep the generic message
+  }
+  if (response.status === 401 && !path.startsWith('/api/auth')) {
+    window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+  }
+  throw new ApiError(response.status, code, message);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   });
-  if (!response.ok) {
-    let code = 'UNKNOWN';
-    let message = `Request failed (${response.status})`;
-    try {
-      const detail = (await response.json()).detail;
-      if (detail?.code) code = detail.code;
-      if (detail?.message) message = detail.message;
-    } catch {
-      // non-JSON error body: keep the generic message
-    }
-    throw new ApiError(response.status, code, message);
-  }
+  if (!response.ok) await throwApiError(response, path);
   return response.json() as Promise<T>;
 }
 
 export const api = {
+  // sign-in and accounts
+  me: () => request<{ user: Me }>('/api/me'),
+  login: (username: string, password: string) =>
+    request<{ user: Me }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ signed_out: boolean }>('/api/auth/logout', { method: 'POST' }),
+  users: () => request<{ users: UserAccount[] }>('/api/users'),
+  createUser: (username: string, displayName: string, password: string) =>
+    request<{ users: UserAccount[] }>('/api/users', {
+      method: 'POST',
+      body: JSON.stringify({ username, display_name: displayName, password }),
+    }),
+  updateUser: (
+    id: number,
+    fields: { display_name?: string; password?: string; disabled?: boolean },
+  ) =>
+    request<{ users: UserAccount[] }>(`/api/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(fields),
+    }),
+  deleteUser: (id: number) =>
+    request<{ users: UserAccount[] }>(`/api/users/${id}`, { method: 'DELETE' }),
   library: () => request<LibrarySummary>('/api/library'),
   createLibrary: (name: string) =>
     request<LibrarySummary>('/api/libraries', {
@@ -69,10 +105,7 @@ export const api = {
       headers: { 'Content-Type': 'application/xml' },
       body: file,
     });
-    if (!response.ok) {
-      const detail = (await response.json()).detail;
-      throw new ApiError(response.status, detail?.code ?? 'UNKNOWN', detail?.message ?? 'Import failed');
-    }
+    if (!response.ok) await throwApiError(response, '/api/library/xml');
     return response.json() as Promise<XmlImportResult>;
   },
   scan: (folder: string, force: boolean) =>
@@ -97,10 +130,7 @@ export const api = {
       `/api/library/playlists?name=${encodeURIComponent(file.name)}`,
       { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: file },
     );
-    if (!response.ok) {
-      const detail = (await response.json()).detail;
-      throw new ApiError(response.status, detail?.code ?? 'UNKNOWN', detail?.message ?? 'Import failed');
-    }
+    if (!response.ok) await throwApiError(response, '/api/library/playlists');
     return response.json() as Promise<PlaylistImportResult>;
   },
   playlistTracks: (id: number) =>
@@ -122,14 +152,19 @@ export const api = {
   // wedding couples (DJ side)
   couples: () => request<{ couples: CoupleSummary[] }>('/api/couples'),
   couple: (id: number) => request<CoupleDetail>(`/api/couples/${id}`),
-  createCouple: (names: string, weddingDate: string) =>
+  createCouple: (names: string, weddingDate: string, djId: number | null = null) =>
     request<CoupleDetail>('/api/couples', {
       method: 'POST',
-      body: JSON.stringify({ names, wedding_date: weddingDate }),
+      body: JSON.stringify({ names, wedding_date: weddingDate, dj_id: djId }),
     }),
   updateCouple: (
     id: number,
-    fields: { names?: string; wedding_date?: string; briefing_text?: string },
+    fields: {
+      names?: string;
+      wedding_date?: string;
+      briefing_text?: string;
+      dj_id?: number;
+    },
   ) =>
     request<CoupleDetail>(`/api/couples/${id}`, {
       method: 'PATCH',
@@ -152,10 +187,7 @@ async function download(path: string, body: unknown, filename: string): Promise<
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!response.ok) {
-    const detail = (await response.json()).detail;
-    throw new ApiError(response.status, detail?.code ?? 'UNKNOWN', detail?.message ?? 'Export failed');
-  }
+  if (!response.ok) await throwApiError(response, path);
   const url = URL.createObjectURL(await response.blob());
   const anchor = document.createElement('a');
   anchor.href = url;

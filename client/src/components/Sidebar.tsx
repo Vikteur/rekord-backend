@@ -1,23 +1,14 @@
 import { useState } from 'react';
 import { useApp } from '../store';
+import { useAuth } from '../auth';
 import { useUi } from '../ui/UiContext';
 import { ThemeToggle } from '../theme/ThemeToggle';
 import { ArrowRight, ChevronDown, Folder, Plus } from './Icons';
-
-/** The gradient brand mark — four white "equalizer" bars. */
-function LogoMark() {
-  return (
-    <div className="logo-mark" aria-hidden>
-      <span style={{ height: 7 }} />
-      <span style={{ height: 12 }} />
-      <span style={{ height: 5 }} />
-      <span style={{ height: 9, opacity: 0.72 }} />
-    </div>
-  );
-}
+import { LogoMark } from './LogoMark';
 
 export function Sidebar() {
   const s = useApp();
+  const { user, signOut } = useAuth();
   const ui = useUi();
   const [libOpen, setLibOpen] = useState(false);
   const { lib, libraries, activeId, playlists, playlist, filterId, prefs, results, chosenIds, leftOut, couples } = s;
@@ -234,6 +225,19 @@ export function Sidebar() {
                 : leftOut.length > 0
                   ? `${leftOut.length} unresolved will be skipped`
                   : 'all tracks resolved'}
+        </div>
+        {/* Who is signed in — sign out is always one visible click away. */}
+        <div className="user-row">
+          <span className="user-name" title={user ? `Signed in as ${user.username}` : undefined}>
+            {user?.display_name ?? '…'}
+          </span>
+          <button
+            className="btn btn-sm"
+            title="Return to the sign-in screen"
+            onClick={() => void signOut()}
+          >
+            Sign out
+          </button>
         </div>
         <ThemeToggle />
       </div>

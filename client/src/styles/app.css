@@ -1235,3 +1235,58 @@ textarea {
 .nav-label-link.active {
   color: var(--text);
 }
+
+/* --- sign in ---------------------------------------------------------------
+   The gate shown instead of the app shell. One centered card, the same brand
+   mark as the sidebar, and plain form classes — nothing here is new visual
+   language, so the screen reads as "the app, locked". */
+.login-view {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--sidebar-bg);
+}
+.login-card {
+  width: 320px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px 20px;
+  background: var(--card);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 28px var(--card-shadow);
+}
+.login-brand {
+  justify-content: center;
+  margin-bottom: 2px;
+}
+.login-hint {
+  text-align: center;
+  margin: 0 0 6px;
+}
+.login-card .field-label {
+  margin-top: 4px;
+}
+.login-card .btn-primary {
+  margin-top: 10px;
+}
+
+/* Who is signed in, at the bottom of the sidebar. */
+.user-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.user-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
