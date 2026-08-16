@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { ApiError, api } from '../api';
+import { useAuth } from '../auth';
 import { formatDuration } from '../format';
 import { useApp } from '../store';
-import type { CoupleDetail, CoupleEntry, ListKind } from '../types';
+import type { CoupleDetail, CoupleEntry, ListKind, UserAccount } from '../types';
 import { useUi } from '../ui/UiContext';
 import { Panel } from './Panel';
 
@@ -79,6 +80,8 @@ function EntryLine({ entry }: { entry: CoupleEntry }) {
  */
 export function CouplesPanel() {
   const s = useApp();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const { panelArg, closePanel } = useUi();
   const [selectedId, setSelectedId] = useState<number | null>(() => {
     const parsed = Number(panelArg);
@@ -87,8 +90,19 @@ export function CouplesPanel() {
   const [detail, setDetail] = useState<CoupleDetail | null>(null);
   const [names, setNames] = useState('');
   const [date, setDate] = useState('');
+  const [djId, setDjId] = useState<number | ''>(''); // '' = myself
+  const [accounts, setAccounts] = useState<UserAccount[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Only the admin assigns weddings to other DJs, so only they need the list.
+  useEffect(() => {
+    if (!isAdmin) return;
+    api
+      .users()
+      .then((data) => setAccounts(data.users.filter((account) => !account.disabled)))
+      .catch(() => undefined);
+  }, [isAdmin]);
 
   // The couple answers from home — poll while their page is open so the
   // lists stream in live.
@@ -119,9 +133,14 @@ export function CouplesPanel() {
     setBusy(true);
     setError('');
     try {
-      const created = await api.createCouple(names.trim(), date);
+      const created = await api.createCouple(
+        names.trim(),
+        date,
+        djId === '' ? null : djId,
+      );
       setNames('');
       setDate('');
+      setDjId('');
       setSelectedId(created.id);
       setDetail(created);
       await s.refreshCouples();
@@ -189,11 +208,36 @@ export function CouplesPanel() {
               className="input"
               style={{ width: 150 }}
               type="date"
-              placeholder="2026-09-19"
+              placeholder="e.g. 2026-09-19"
               value={date}
               onChange={(event) => setDate(event.target.value)}
             />
           </div>
+          {isAdmin && (
+            <div className="field-row">
+              <label className="field-label" htmlFor="couple-dj">
+                Their DJ
+              </label>
+              <select
+                id="couple-dj"
+                className="input"
+                style={{ flex: 1 }}
+                value={djId}
+                onChange={(event) =>
+                  setDjId(event.target.value === '' ? '' : Number(event.target.value))
+                }
+              >
+                <option value="">Me ({user?.display_name})</option>
+                {accounts
+                  .filter((account) => account.id !== user?.id)
+                  .map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.display_name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
           <div className="field-row">
             <button
               className="btn btn-primary"
@@ -222,6 +266,9 @@ export function CouplesPanel() {
                 <span className="list-main">
                   <strong>{couple.names}</strong>
                   <span className="muted"> · {couple.wedding_date}</span>
+                  {isAdmin && couple.dj_name && (
+                    <span className="muted"> · DJ {couple.dj_name}</span>
+                  )}
                 </span>
                 <span className="mono muted">{couple.song_count} songs</span>
               </button>
@@ -244,6 +291,43 @@ export function CouplesPanel() {
           ‹ All couples
         </button>
       </section>
+
+      {isAdmin && (
+        <section className="panel-section">
+          <h3 className="panel-section-title">Their DJ</h3>
+          <div className="field-row">
+            <select
+              className="input"
+              style={{ flex: 1 }}
+              value={couple.dj_id ?? ''}
+              aria-label="The DJ this wedding belongs to"
+              onChange={async (event) => {
+                if (event.target.value === '') return;
+                setError('');
+                try {
+                  setDetail(await api.updateCouple(couple.id, {
+                    dj_id: Number(event.target.value),
+                  }));
+                  await s.refreshCouples();
+                } catch (err) {
+                  setError(message(err));
+                }
+              }}
+            >
+              {couple.dj_id === null && <option value="">Unassigned (admin only)</option>}
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="hint">
+            Handing the wedding over moves it into that DJ&rsquo;s list — as admin you
+            keep seeing it either way.
+          </p>
+        </section>
+      )}
 
       <section className="panel-section">
         <h3 className="panel-section-title">Magic links</h3>

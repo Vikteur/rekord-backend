@@ -7,7 +7,13 @@ import {
 } from 'react';
 
 /** Secondary flows live in slide-in panels opened from the sidebar. */
-export type PanelId = 'sources' | 'addPlaylist' | 'export' | 'remembered' | 'couples';
+export type PanelId =
+  | 'sources'
+  | 'addPlaylist'
+  | 'export'
+  | 'remembered'
+  | 'couples'
+  | 'users';
 
 /** Which filter tab the match table is showing. */
 export type TrackTab = 'all' | 'needs' | 'ready' | 'notfound';

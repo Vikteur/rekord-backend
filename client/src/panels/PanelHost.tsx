@@ -4,6 +4,7 @@ import { CouplesPanel } from './CouplesPanel';
 import { ExportPanel } from './ExportPanel';
 import { RememberedPanel } from './RememberedPanel';
 import { SourcesScanPanel } from './SourcesScanPanel';
+import { UsersPanel } from './UsersPanel';
 
 /** Renders whichever secondary-flow panel is currently open. */
 export function PanelHost() {
@@ -19,6 +20,8 @@ export function PanelHost() {
       return <RememberedPanel />;
     case 'couples':
       return <CouplesPanel />;
+    case 'users':
+      return <UsersPanel />;
     default:
       return null;
   }

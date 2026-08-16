@@ -200,6 +200,15 @@ export function Sidebar() {
           <span>Remembered</span>
           <span className="mono muted">{prefs.length}</span>
         </button>
+        {user?.role === 'admin' && (
+          <button
+            className="stat-row"
+            title="Create DJ logins and manage their access"
+            onClick={() => ui.openPanel('users')}
+          >
+            <span>DJ accounts</span>
+          </button>
+        )}
       </div>
 
       {/* Export dock — always says what's missing when it can't export yet */}
