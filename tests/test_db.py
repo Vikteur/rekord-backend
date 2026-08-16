@@ -393,6 +393,86 @@ def test_migrates_a_v1_database_without_losing_tracks(
     assert len(db.all_tracks()) == 2
 
 
+def test_migrates_a_v5_database_to_owned_libraries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v5 libraries had no owner and globally unique names. The v6 rebuild
+    must keep ids (sources/preferences/playlists reference them), mark old
+    rows unowned (admin-only), and leave the FK graph intact."""
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "v5.db")
+    with db.connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE libraries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+            );
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL, label TEXT NOT NULL, added_at TEXT NOT NULL,
+                UNIQUE (library_id, kind, label)
+            );
+            CREATE TABLE tracks (
+                id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, filename TEXT NOT NULL,
+                ext TEXT NOT NULL, artist TEXT, title TEXT NOT NULL, album TEXT,
+                duration_sec REAL, bitrate_kbps INTEGER, bpm REAL, musical_key TEXT,
+                tag_source TEXT NOT NULL, size_bytes INTEGER NOT NULL, mtime_ms INTEGER NOT NULL
+            );
+            CREATE TABLE track_sources (
+                track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                source_id INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                PRIMARY KEY (track_id, source_id)
+            );
+            CREATE TABLE preferences (
+                library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+                id TEXT NOT NULL, signature TEXT NOT NULL, artist TEXT NOT NULL,
+                title TEXT NOT NULL, track_id TEXT NOT NULL, chosen_at TEXT NOT NULL,
+                PRIMARY KEY (library_id, id)
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE playlists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+                name TEXT NOT NULL, added_at TEXT NOT NULL,
+                missing_count INTEGER NOT NULL DEFAULT 0, UNIQUE (library_id, name)
+            );
+            INSERT INTO libraries VALUES (1, 'MacBook', '2026-01-01T00:00:00Z'),
+                                         (7, 'Studio PC', '2026-01-02T00:00:00Z');
+            INSERT INTO sources VALUES (1, 7, 'folder', '/music', '2026-01-01T00:00:00Z');
+            INSERT INTO tracks VALUES ('aaaaaaaaaaaa', '/music/a.mp3', 'a', 'mp3',
+                'Artist One', 'Anthem', NULL, 200.0, 320, NULL, NULL, 'tags', 10, 1);
+            INSERT INTO track_sources VALUES ('aaaaaaaaaaaa', 1);
+            INSERT INTO preferences VALUES (7, 'sig123', 'artist one|anthem||',
+                'Artist One', 'Anthem', 'aaaaaaaaaaaa', '2026-01-01T00:00:00Z');
+            INSERT INTO playlists VALUES (3, 7, 'Most played', '2026-01-01T00:00:00Z', 0);
+            INSERT INTO settings VALUES ('active_library_id', '7');
+            """
+        )
+
+    db.init()
+
+    libraries = {lib.id: lib for lib in db.list_libraries()}
+    assert set(libraries) == {1, 7}                      # ids survived the rebuild
+    assert all(lib.owner_id is None for lib in libraries.values())
+    assert libraries[7].track_count == 1                 # sources still attached
+    assert db.preference_map(7) == {"sig123": "aaaaaaaaaaaa"}
+    assert [p.name for p in db.list_playlists(7)] == ["Most played"]
+    assert db.active_library_id() == 7
+    with db.connect() as conn:
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    db.init()  # idempotent
+    assert len(db.list_libraries()) == 2
+
+    # A DJ's view is scoped; per-DJ names may repeat across owners.
+    assert db.list_libraries(owner_id=99) == []
+    mine = db.create_library("MacBook", owner_id=99)     # same name, own namespace
+    assert db.library_visible(mine, 99, False)
+    assert not db.library_visible(1, 99, False)          # unowned = admin-only
+    assert db.library_visible(1, 99, True)
+
+
 def test_migrates_a_v3_database_into_a_default_library(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

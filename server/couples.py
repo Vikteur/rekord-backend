@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS couples (
     names           TEXT NOT NULL,           -- "Sofie & Jan"
     wedding_date    TEXT NOT NULL,           -- ISO date; tokens die after it
     briefing_text   TEXT NOT NULL DEFAULT '',-- "how we party", shown to the DJ
+    dj_id           INTEGER,                 -- users.id; NULL = admin-only
     couple_token    TEXT NOT NULL UNIQUE,
     friends_token   TEXT NOT NULL UNIQUE,
     couple_revoked  INTEGER NOT NULL DEFAULT 0,
@@ -139,6 +140,14 @@ class CoupleError(Exception):
 def init() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        # Pre-auth couples tables lack the DJ owner column; NULL = admin-only.
+        if not _has_column(conn, "couples", "dj_id"):
+            conn.execute("ALTER TABLE couples ADD COLUMN dj_id INTEGER")
+
+
+def _has_column(conn, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
 
 
 def _now() -> str:
@@ -158,16 +167,16 @@ def _parse_date(value: str) -> date:
 
 # --- couples ----------------------------------------------------------------
 
-def create_couple(names: str, wedding_date: str) -> int:
+def create_couple(names: str, wedding_date: str, dj_id: int | None = None) -> int:
     names = names.strip()
     if not names:
         raise CoupleError("EMPTY_NAMES", "Give the couple a name, e.g. “Sofie & Jan”.")
     _parse_date(wedding_date)
     with connect() as conn:
         cursor = conn.execute(
-            "INSERT INTO couples (names, wedding_date, couple_token, friends_token,"
-            " created_at) VALUES (?, ?, ?, ?, ?)",
-            (names, wedding_date.strip(), _new_token(), _new_token(), _now()),
+            "INSERT INTO couples (names, wedding_date, dj_id, couple_token,"
+            " friends_token, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (names, wedding_date.strip(), dj_id, _new_token(), _new_token(), _now()),
         )
         return int(cursor.lastrowid)
 
@@ -216,11 +225,28 @@ def delete_couple(couple_id: int) -> bool:
         ).rowcount > 0
 
 
-def list_couples() -> list[dict]:
-    """Every couple with per-chapter song counts, newest wedding first."""
+def set_dj(couple_id: int, dj_id: int | None) -> bool:
+    """Hand a couple to (or take it from) a DJ — an admin-only reassignment."""
+    with connect() as conn:
+        cursor = conn.execute(
+            "UPDATE couples SET dj_id = ? WHERE id = ?", (dj_id, couple_id)
+        )
+        return cursor.rowcount > 0
+
+
+def list_couples(dj_id: int | None = None) -> list[dict]:
+    """Couples with per-chapter song counts, newest wedding first.
+
+    `dj_id` narrows to one DJ's own couples; None is the admin's all-of-them
+    view (NULL-owned rows included).
+    """
+    where, params = "", ()
+    if dj_id is not None:
+        where, params = "WHERE dj_id = ? ", (dj_id,)
     with connect() as conn:
         couples = conn.execute(
-            "SELECT * FROM couples ORDER BY wedding_date DESC, id DESC"
+            f"SELECT * FROM couples {where}ORDER BY wedding_date DESC, id DESC",
+            params,
         ).fetchall()
         entry_counts = conn.execute(
             "SELECT couple_id, kind, COUNT(*) AS n FROM couple_entries"
@@ -242,6 +268,7 @@ def list_couples() -> list[dict]:
             "id": row["id"],
             "names": row["names"],
             "wedding_date": row["wedding_date"],
+            "dj_id": row["dj_id"],
             "created_at": row["created_at"],
             "counts": {
                 **{kind: by_couple.get(row["id"], {}).get(kind, 0) for kind in LIST_KINDS},

@@ -32,14 +32,20 @@ from server.models import (
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "library.db"
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS libraries (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL
+    name       TEXT NOT NULL,
+    owner_id   INTEGER,                 -- users.id; NULL = pre-auth rows, admin-only
+    created_at TEXT NOT NULL,
+    UNIQUE (owner_id, name)             -- names are unique per DJ, not globally
 );
+-- SQLite treats NULLs as distinct in UNIQUE, so unowned (pre-auth) rows need
+-- their own uniqueness or renames could collide them silently.
+CREATE UNIQUE INDEX IF NOT EXISTS libraries_unowned_name
+    ON libraries(name) WHERE owner_id IS NULL;
 CREATE TABLE IF NOT EXISTS sources (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     library_id INTEGER NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
@@ -161,6 +167,7 @@ def init() -> None:
     with connect() as conn:
         conn.execute("PRAGMA journal_mode = WAL")
         _migrate(conn)
+        _migrate_libraries_v6(conn)
         conn.executescript(SCHEMA)
         _finish_migration(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -178,6 +185,40 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn, "preferences", "library_id"
     ):
         conn.execute("ALTER TABLE preferences RENAME TO preferences_v3")
+
+
+def _migrate_libraries_v6(conn: sqlite3.Connection) -> None:
+    """v6: libraries gain an owner and per-owner (not global) unique names.
+
+    The rename-aside idiom can't be used here: renaming `libraries` would
+    rewrite the FK clauses in sources/preferences/playlists to follow it, and
+    dropping it afterwards would cascade their rows away. So: the classic
+    SQLite rebuild — FKs off, build the new table, copy rows (ids preserved,
+    owner NULL = admin-only), drop the old one, swap the name back.
+    """
+    if not _table_exists(conn, "libraries") or _has_column(conn, "libraries", "owner_id"):
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE libraries_v6 (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL,
+                owner_id   INTEGER,
+                created_at TEXT NOT NULL,
+                UNIQUE (owner_id, name)
+            );
+            INSERT INTO libraries_v6 (id, name, owner_id, created_at)
+                 SELECT id, name, NULL, created_at FROM libraries;
+            DROP TABLE libraries;
+            ALTER TABLE libraries_v6 RENAME TO libraries;
+            CREATE UNIQUE INDEX libraries_unowned_name
+                ON libraries(name) WHERE owner_id IS NULL;
+            """
+        )
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _finish_migration(conn: sqlite3.Connection) -> None:
@@ -225,13 +266,13 @@ def _finish_migration(conn: sqlite3.Connection) -> None:
 
 # --- libraries -------------------------------------------------------------
 
-def create_library(name: str) -> int:
+def create_library(name: str, owner_id: int | None = None) -> int:
     name = name.strip()
     with connect() as conn:
         try:
             cursor = conn.execute(
-                "INSERT INTO libraries (name, created_at) VALUES (?, ?)",
-                (name, datetime.now(timezone.utc).isoformat()),
+                "INSERT INTO libraries (name, owner_id, created_at) VALUES (?, ?, ?)",
+                (name, owner_id, datetime.now(timezone.utc).isoformat()),
             )
         except sqlite3.IntegrityError as exc:
             raise DuplicateLibraryName(f"A library named {name!r} already exists.") from exc
@@ -259,18 +300,44 @@ def delete_library(library_id: int) -> bool:
         return True
 
 
-def list_libraries() -> list[LibraryInfo]:
+def list_libraries(owner_id: int | None = None) -> list[LibraryInfo]:
+    """All libraries (the admin's view), or one DJ's own when `owner_id` is set."""
+    where, params = "", ()
+    if owner_id is not None:
+        where, params = "WHERE l.owner_id = ? ", (owner_id,)
     with connect() as conn:
         rows = conn.execute(
-            "SELECT l.id, l.name, l.created_at, "
+            "SELECT l.id, l.name, l.owner_id, l.created_at, "
             "       COUNT(DISTINCT s.id) AS source_count, "
             "       COUNT(DISTINCT ts.track_id) AS track_count "
             "FROM libraries l "
             "LEFT JOIN sources s ON s.library_id = l.id "
             "LEFT JOIN track_sources ts ON ts.source_id = s.id "
-            "GROUP BY l.id ORDER BY l.name"
+            f"{where}GROUP BY l.id ORDER BY l.name",
+            params,
         ).fetchall()
     return [LibraryInfo(**dict(row)) for row in rows]
+
+
+def library_owner(library_id: int) -> int | None:
+    """The owning user id (None for pre-auth rows) — or None if no such library;
+    pair with `library_exists` when the difference matters."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM libraries WHERE id = ?", (library_id,)
+        ).fetchone()
+    return row["owner_id"] if row else None
+
+
+def library_visible(library_id: int, user_id: int, is_admin: bool) -> bool:
+    """Whether this user may even know the library exists."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM libraries WHERE id = ?", (library_id,)
+        ).fetchone()
+    if row is None:
+        return False
+    return is_admin or row["owner_id"] == user_id
 
 
 def library_exists(library_id: int) -> bool:

@@ -61,6 +61,7 @@ class LibraryInfo(BaseModel):
 
     id: int
     name: str
+    owner_id: int | None = None   # users.id; None = pre-auth row, admin-only
     created_at: str
     track_count: int
     source_count: int
