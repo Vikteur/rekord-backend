@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 import server.main as main
 from server import db
-from server.library import LIBRARY
+from server.library import LIBRARIES
 from server.scanner.scan import Scanner
 from server.spotify.fetch import SpotifyFetchError
 from tests.helpers import auth_env, make_audio_tree, sign_in_admin, write_mp3
@@ -17,9 +17,10 @@ from tests.test_rekordbox_import import collection_xml
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "library.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
-    monkeypatch.setattr(main, "_index_cache", None)
+    monkeypatch.setattr(main, "_index_cache", {})
+    LIBRARIES.invalidate()  # ids repeat across per-test databases
     auth_env(monkeypatch)
-    with TestClient(main.app) as client:  # runs the startup hook (db.init + load)
+    with TestClient(main.app) as client:  # runs the startup hook (db.init)
         sign_in_admin(client)
         client.post("/api/libraries", json={"name": "MacBook"})
         yield client
@@ -30,7 +31,8 @@ def bare_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """A client with no libraries at all (fresh install)."""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "bare.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
-    monkeypatch.setattr(main, "_index_cache", None)
+    monkeypatch.setattr(main, "_index_cache", {})
+    LIBRARIES.invalidate()
     auth_env(monkeypatch)
     with TestClient(main.app) as client:
         sign_in_admin(client)
@@ -59,8 +61,10 @@ def scan_and_wait(client: TestClient, folder: Path) -> dict:
 def test_full_flow_scan_match_export(client: TestClient, library: Path) -> None:
     status = scan_and_wait(client, library)
     assert status["state"] == "done"
-    assert status["library"]["track_count"] == 6
     assert status["scanned"]["skipped_drm"] == 1
+    # The status carries only the id; the summary is fetched per user.
+    assert status["library_id"] == client.get("/api/library").json()["active_library_id"]
+    assert client.get("/api/library").json()["track_count"] == 6
 
     tracks = [
         {"index": 0, "artist": "Étienne de Crécy", "title": "Am I Wrong"},

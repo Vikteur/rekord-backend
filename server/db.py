@@ -350,28 +350,46 @@ def library_exists(library_id: int) -> bool:
         )
 
 
-def active_library_id() -> int | None:
-    """The selected library, falling back to the only/first one that exists."""
+def active_library_id(user_id: int, is_admin: bool = False) -> int | None:
+    """This user's selected library, falling back to the first they can see.
+
+    The admin also inherits the pre-auth global selection (the legacy
+    `active_library_id` settings key), so an upgraded install keeps whatever
+    library was open before accounts existed.
+    """
+    keys = [f"active_library:{user_id}"]
+    if is_admin:
+        keys.append(ACTIVE_LIBRARY)
     with connect() as conn:
-        row = conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (ACTIVE_LIBRARY,)
-        ).fetchone()
-        if row:
-            library_id = int(row["value"])
-            if conn.execute(
-                "SELECT 1 FROM libraries WHERE id = ?", (library_id,)
-            ).fetchone():
-                return library_id
-        fallback = conn.execute("SELECT id FROM libraries ORDER BY id LIMIT 1").fetchone()
+        for key in keys:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
+            if row is None:
+                continue
+            owner = conn.execute(
+                "SELECT owner_id FROM libraries WHERE id = ?", (int(row["value"]),)
+            ).fetchone()
+            if owner is not None and (is_admin or owner["owner_id"] == user_id):
+                return int(row["value"])
+        if is_admin:
+            fallback = conn.execute(
+                "SELECT id FROM libraries ORDER BY id LIMIT 1"
+            ).fetchone()
+        else:
+            fallback = conn.execute(
+                "SELECT id FROM libraries WHERE owner_id = ? ORDER BY id LIMIT 1",
+                (user_id,),
+            ).fetchone()
         return int(fallback["id"]) if fallback else None
 
 
-def set_active_library_id(library_id: int) -> None:
+def set_active_library_id(user_id: int, library_id: int) -> None:
     with connect() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (ACTIVE_LIBRARY, str(library_id)),
+            (f"active_library:{user_id}", str(library_id)),
         )
 
 

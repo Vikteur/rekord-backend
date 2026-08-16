@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from server import db
-from server.library import LIBRARY
+from server.library import LIBRARIES
 from server.models import LibraryTrack
 from server.scanner.tags import read_track
 from server.scanner.walk import walk_library
@@ -96,12 +96,12 @@ class Scanner:
 
             tracks.sort(key=lambda track: track.path)
             db.replace_source_tracks(source_id, tracks)
-            if LIBRARY.id == library_id:
-                LIBRARY.load(library_id)
+            # Whoever reads this library next gets the fresh tracks; the
+            # client refreshes its summary itself when it sees state=done.
+            LIBRARIES.invalidate(library_id)
 
             self._set(
                 state="done",
-                library=LIBRARY.summary(),
                 scanned={
                     "folder": folder,
                     "track_count": len(tracks),

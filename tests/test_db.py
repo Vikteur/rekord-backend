@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from server import db
-from server.library import ActiveLibrary
+from server.library import LibraryCache, summary_for
 from server.models import LibraryTrack
 
 
@@ -37,18 +37,21 @@ def test_init_is_idempotent() -> None:
 # --- libraries -------------------------------------------------------------
 
 def test_create_list_and_select_libraries() -> None:
-    macbook = db.create_library("MacBook")
-    studio = db.create_library("Studio PC")
+    macbook = db.create_library("MacBook", owner_id=1)
+    studio = db.create_library("Studio PC", owner_id=1)
 
     libraries = {library.name: library for library in db.list_libraries()}
     assert set(libraries) == {"MacBook", "Studio PC"}
     assert libraries["MacBook"].track_count == 0
     assert libraries["MacBook"].source_count == 0
 
-    # With nothing selected it falls back to the first library.
-    assert db.active_library_id() in {macbook, studio}
-    db.set_active_library_id(studio)
-    assert db.active_library_id() == studio
+    # With nothing selected it falls back to the first library the user owns.
+    assert db.active_library_id(1) in {macbook, studio}
+    db.set_active_library_id(1, studio)
+    assert db.active_library_id(1) == studio
+    # Selections are per user; another DJ owns nothing here.
+    assert db.active_library_id(2) is None
+    assert db.active_library_id(2, is_admin=True) in {macbook, studio}
 
 
 def test_library_names_are_unique() -> None:
@@ -114,11 +117,12 @@ def test_deleting_a_library_removes_its_sources_and_tracks(lib: int) -> None:
     assert db.delete_library(9999) is False
 
 
-def test_active_library_falls_back_when_the_selected_one_is_deleted(lib: int) -> None:
-    other = db.create_library("Studio PC")
-    db.set_active_library_id(lib)
+def test_active_library_falls_back_when_the_selected_one_is_deleted() -> None:
+    lib = db.create_library("MacBook", owner_id=1)
+    other = db.create_library("Studio PC", owner_id=1)
+    db.set_active_library_id(1, lib)
     db.delete_library(lib)
-    assert db.active_library_id() == other
+    assert db.active_library_id(1) == other
 
 
 def test_the_same_folder_can_be_scanned_into_two_libraries(lib: int) -> None:
@@ -288,56 +292,61 @@ def test_dropping_a_track_from_a_source_removes_it_when_unclaimed(lib: int) -> N
     assert [t.path for t in db.all_tracks()] == ["/music/a.mp3"]
 
 
-# --- in-memory active library ----------------------------------------------
+# --- the in-memory library cache -------------------------------------------
 
-def test_active_library_reloads_from_disk(lib: int) -> None:
+def test_cached_library_reads_from_disk(lib: int) -> None:
     db.replace_source_tracks(
         db.upsert_source(lib, "folder", "/music"),
         [track("a" * 12, "/music/a.mp3"), track("b" * 12, "/music/b.wav", ext="wav")],
     )
 
-    library = ActiveLibrary()
-    assert library.is_loaded() is False
-    library.load(lib)
-
-    assert library.is_loaded() is True
-    assert library.id == lib
-    assert library.name == "MacBook"
-    assert len(library.tracks) == 2
-    assert library.by_id["a" * 12].path == "/music/a.mp3"
-    summary = library.summary()
-    assert summary["track_count"] == 2
-    assert summary["by_ext"] == {"mp3": 1, "wav": 1}
-    assert summary["active_library_name"] == "MacBook"
-    assert summary["sources"][0]["label"] == "/music"
+    cache = LibraryCache()
+    loaded = cache.get(lib)
+    assert loaded.is_loaded() is True
+    assert loaded.id == lib
+    assert loaded.name == "MacBook"
+    assert len(loaded.tracks) == 2
+    assert loaded.by_id["a" * 12].path == "/music/a.mp3"
 
 
-def test_switching_libraries_swaps_the_tracks(lib: int) -> None:
-    other = db.create_library("Studio PC")
+def test_invalidate_reloads_with_a_new_generation(lib: int) -> None:
+    cache = LibraryCache()
+    first = cache.get(lib)
+    assert cache.get(lib) is first  # cached: same snapshot, no re-read
+
     db.replace_source_tracks(
         db.upsert_source(lib, "folder", "/mac"), [track("a" * 12, "/mac/a.mp3")]
     )
+    cache.invalidate(lib)
+    reloaded = cache.get(lib)
+    assert [t.path for t in reloaded.tracks] == ["/mac/a.mp3"]
+    assert reloaded.generation > first.generation  # matcher index must rebuild
+
+
+def test_summary_is_scoped_per_user(lib: int) -> None:
+    other = db.create_library("Studio PC", owner_id=2)
     db.replace_source_tracks(
         db.upsert_source(other, "folder", "/pc"), [track("b" * 12, "/pc/b.mp3")]
     )
 
-    library = ActiveLibrary()
-    library.load(lib)
-    assert [t.path for t in library.tracks] == ["/mac/a.mp3"]
-    generation = library.generation
+    dj_view = summary_for(2, False)
+    assert [entry["name"] for entry in dj_view["libraries"]] == ["Studio PC"]
+    assert dj_view["active_library_id"] == other
+    assert dj_view["track_count"] == 1
+    assert dj_view["by_ext"] == {"mp3": 1}
+    assert dj_view["sources"][0]["label"] == "/pc"
 
-    library.load(other)
-    assert [t.path for t in library.tracks] == ["/pc/b.mp3"]
-    assert library.generation > generation  # forces the matcher index to rebuild
-    assert db.active_library_id() == other  # selection is persisted
+    admin_view = summary_for(99, True)
+    assert {entry["name"] for entry in admin_view["libraries"]} == {
+        "MacBook", "Studio PC",
+    }
 
 
-def test_active_library_with_no_libraries_is_empty() -> None:
-    library = ActiveLibrary()
-    library.load()
-    assert library.id is None
-    assert library.is_loaded() is False
-    assert library.summary()["libraries"] == []
+def test_summary_with_no_libraries_is_empty() -> None:
+    view = summary_for(1, False)
+    assert view["active_library_id"] is None
+    assert view["track_count"] == 0
+    assert view["libraries"] == []
 
 
 # --- migrations ------------------------------------------------------------
@@ -385,7 +394,8 @@ def test_migrates_a_v1_database_without_losing_tracks(
     libraries = db.list_libraries()
     assert [library.name for library in libraries] == ["My library"]
     assert libraries[0].track_count == 2
-    assert db.active_library_id() == libraries[0].id
+    # The pre-auth selection carries over to the admin's view.
+    assert db.active_library_id(1, is_admin=True) == libraries[0].id
     counts = {s.label: s.track_count for s in db.list_sources(libraries[0].id)}
     assert counts == {"/music": 1, "rekordbox.xml": 1}
 
@@ -458,7 +468,9 @@ def test_migrates_a_v5_database_to_owned_libraries(
     assert libraries[7].track_count == 1                 # sources still attached
     assert db.preference_map(7) == {"sig123": "aaaaaaaaaaaa"}
     assert [p.name for p in db.list_playlists(7)] == ["Most played"]
-    assert db.active_library_id() == 7
+    # The admin inherits the pre-auth selection; a DJ sees none of this.
+    assert db.active_library_id(1, is_admin=True) == 7
+    assert db.active_library_id(99) is None
     with db.connect() as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -518,4 +530,4 @@ def test_migrates_a_v3_database_into_a_default_library(
     # The remembered choice carries over into that library.
     assert db.preference_map(default) == {"sig123": "aaaaaaaaaaaa"}
     assert db.list_preferences(default)[0].file_label == "a.mp3"
-    assert db.active_library_id() == default
+    assert db.active_library_id(1, is_admin=True) == default

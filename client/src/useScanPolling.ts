@@ -7,9 +7,10 @@ import type { LibrarySummary, ScanStatus } from './types';
  *
  * The whole interval lifecycle lives here so it can't leak: the poll starts
  * only when a scan is running and no interval is live, clears itself the moment
- * the scan leaves the "scanning" state (handing back the finished library), and
- * is torn down on unmount. `setScan`/`onDone` are assumed stable (plain state
- * setters), so the effect re-runs only when `scan` changes.
+ * the scan leaves the "scanning" state (then re-fetches the library summary,
+ * which is per-user and no longer rides along in the status), and is torn down
+ * on unmount. `setScan`/`onDone` are assumed stable (plain state setters), so
+ * the effect re-runs only when `scan` changes.
  */
 export function useScanPolling(
   scan: ScanStatus | null,
@@ -27,7 +28,7 @@ export function useScanPolling(
           if (status.state !== 'scanning' && polling.current) {
             window.clearInterval(polling.current);
             polling.current = null;
-            if (status.library) onDone(status.library);
+            if (status.state === 'done') onDone(await api.library());
           }
         } catch {
           // transient poll failure: keep polling

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import server.main as main
 from server import auth, db
+from server.library import LIBRARIES
 from server.scanner.scan import Scanner
 from tests.helpers import ADMIN_CREDS, auth_env, sign_in_admin
 
@@ -21,7 +22,8 @@ def anon_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """A fresh app whose admin exists but where nobody has signed in yet."""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "library.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
-    monkeypatch.setattr(main, "_index_cache", None)
+    monkeypatch.setattr(main, "_index_cache", {})
+    LIBRARIES.invalidate()
     auth_env(monkeypatch)
     auth.reset_rate_limits()
     with TestClient(main.app) as client:

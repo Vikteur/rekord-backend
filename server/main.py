@@ -15,7 +15,7 @@ from server.export.m3u8 import build_m3u8
 from server.export.missing import build_missing_txt
 from server.export.skipped import build_skipped_txt
 from server.export.rekordbox_xml import build_rekordbox_xml
-from server.library import LIBRARY
+from server.library import LIBRARIES, LoadedLibrary, summary_for
 from server.matcher.index import LibraryIndex
 from server.matcher.match import match_playlist
 from server.matcher.signature import signature_id, signature_of
@@ -37,12 +37,11 @@ from server.spotify.parse_embed import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Restore the active library from disk so a restart needs no rescan.
+    # Libraries load lazily per user; a restart still needs no rescan.
     db.init()
     auth.init()
     couples.init()
     auth.ensure_admin_from_env()
-    LIBRARY.load()
     yield
 
 
@@ -116,31 +115,28 @@ def _count_missing_files(tracks: list) -> int:
     return missing
 
 
-_index_cache: tuple[int, int | None, LibraryIndex] | None = None
+# (library_id, playlist_id) -> (generation, index). A LoadedLibrary snapshot
+# is immutable once handed out, so a stale generation simply rebuilds; worst
+# case under concurrent matches is a redundant rebuild, never a torn read.
+_index_cache: dict[tuple[int, int | None], tuple[int, LibraryIndex]] = {}
+_INDEX_CACHE_MAX = 4
 
 
-def _get_index(playlist_id: int | None = None) -> LibraryIndex:
-    """The matching index, optionally narrowed to one imported playlist.
-
-    Single-writer assumption: this reads `LIBRARY` and mutates `_index_cache`
-    without a lock. It is safe because this is a single-user local app and
-    `/api/match` is refused while a scan is running, so no writer touches
-    `LIBRARY.generation`/`LIBRARY.tracks` concurrently. If real concurrency is
-    ever expected, guard this cache and snapshot `LIBRARY` under `LIBRARY._lock`.
-    """
-    global _index_cache
-    generation = LIBRARY.generation
-    if (
-        _index_cache is None
-        or _index_cache[0] != generation
-        or _index_cache[1] != playlist_id
-    ):
-        tracks = LIBRARY.tracks
-        if playlist_id is not None:
-            allowed = db.playlist_track_ids(playlist_id)
-            tracks = [track for track in tracks if track.id in allowed]
-        _index_cache = (generation, playlist_id, LibraryIndex(tracks))
-    return _index_cache[2]
+def _get_index(library: LoadedLibrary, playlist_id: int | None = None) -> LibraryIndex:
+    """The matching index for one library, optionally narrowed to a playlist."""
+    key = (library.id, playlist_id)
+    hit = _index_cache.get(key)
+    if hit is not None and hit[0] == library.generation:
+        return hit[1]
+    tracks = library.tracks
+    if playlist_id is not None:
+        allowed = db.playlist_track_ids(playlist_id)
+        tracks = [track for track in tracks if track.id in allowed]
+    index = LibraryIndex(tracks)
+    _index_cache[key] = (library.generation, index)
+    while len(_index_cache) > _INDEX_CACHE_MAX:  # drop the oldest entry
+        _index_cache.pop(next(iter(_index_cache)))
+    return index
 
 
 @app.get("/api/health")
@@ -150,50 +146,54 @@ def health() -> dict:
 
 # --- libraries -------------------------------------------------------------
 
-def _require_library(library_id: int | None) -> int:
-    """The library a write targets: the one asked for, else the active one."""
+def _require_library(user: auth.CurrentUser, library_id: int | None) -> int:
+    """The library a request targets: the one asked for, else the user's
+    active one. Someone else's library answers 404, exactly like a missing
+    one, so ids can't be probed."""
     if library_id is None:
-        library_id = LIBRARY.id
+        library_id = db.active_library_id(user.id, user.is_admin)
     if library_id is None:
         raise _error(
             409, "NO_LIBRARY_SELECTED", "Create a library first, then add music to it."
         )
-    if not db.library_exists(library_id):
+    if not db.library_visible(library_id, user.id, user.is_admin):
         raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
     return library_id
 
 
+def _active_library(user: auth.CurrentUser) -> LoadedLibrary | None:
+    library_id = db.active_library_id(user.id, user.is_admin)
+    return LIBRARIES.get(library_id) if library_id is not None else None
+
+
 @app.get("/api/library")
 def library(user: auth.CurrentUser = Depends(require_user)) -> dict:
-    del user
-    return LIBRARY.summary()
+    return summary_for(user.id, user.is_admin)
 
 
 @app.post("/api/libraries", status_code=201)
 def create_library(
     request: LibraryRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
     name = request.name.strip()
     if not name:
         raise _error(400, "EMPTY_NAME", "Give the library a name.")
     try:
-        library_id = db.create_library(name)
+        library_id = db.create_library(name, owner_id=user.id)
     except db.DuplicateLibraryName as exc:
         raise _error(409, "DUPLICATE_NAME", str(exc))
-    LIBRARY.load(library_id)  # a new library becomes the active one
-    return LIBRARY.summary()
+    db.set_active_library_id(user.id, library_id)  # a new library becomes active
+    return summary_for(user.id, user.is_admin)
 
 
 @app.post("/api/libraries/{library_id}/select")
 def select_library(
     library_id: int, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
-    if not db.library_exists(library_id):
+    if not db.library_visible(library_id, user.id, user.is_admin):
         raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
-    LIBRARY.load(library_id)
-    return LIBRARY.summary()
+    db.set_active_library_id(user.id, library_id)
+    return summary_for(user.id, user.is_admin)
 
 
 @app.patch("/api/libraries/{library_id}")
@@ -201,29 +201,28 @@ def rename_library(
     library_id: int, request: LibraryRequest,
     user: auth.CurrentUser = Depends(require_user),
 ) -> dict:
-    del user
     name = request.name.strip()
     if not name:
         raise _error(400, "EMPTY_NAME", "Give the library a name.")
+    if not db.library_visible(library_id, user.id, user.is_admin):
+        raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
     try:
-        renamed = db.rename_library(library_id, name)
+        db.rename_library(library_id, name)
     except db.DuplicateLibraryName as exc:
         raise _error(409, "DUPLICATE_NAME", str(exc))
-    if not renamed:
-        raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
-    LIBRARY.load(LIBRARY.id)
-    return LIBRARY.summary()
+    LIBRARIES.invalidate(library_id)  # the cached entry carries the old name
+    return summary_for(user.id, user.is_admin)
 
 
 @app.delete("/api/libraries/{library_id}")
 def delete_library(
     library_id: int, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
-    if not db.delete_library(library_id):
+    if not db.library_visible(library_id, user.id, user.is_admin):
         raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
-    LIBRARY.load(None if LIBRARY.id == library_id else LIBRARY.id)
-    return LIBRARY.summary()
+    db.delete_library(library_id)
+    LIBRARIES.invalidate(library_id)
+    return summary_for(user.id, user.is_admin)
 
 
 # --- library sources -------------------------------------------------------
@@ -232,11 +231,14 @@ def delete_library(
 def remove_source(
     source_id: int, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
-    if not db.delete_source(source_id):
+    library_id = db.source_library_id(source_id)
+    if library_id is None or not db.library_visible(
+        library_id, user.id, user.is_admin
+    ):
         raise _error(404, "NO_SOURCE", f"No library source with id {source_id}.")
-    LIBRARY.load(LIBRARY.id)
-    return LIBRARY.summary()
+    db.delete_source(source_id)
+    LIBRARIES.invalidate(library_id)
+    return summary_for(user.id, user.is_admin)
 
 
 @app.post("/api/library/xml")
@@ -245,8 +247,7 @@ async def import_rekordbox_xml(
     user: auth.CurrentUser = Depends(require_user),
 ) -> dict:
     """Import a rekordbox collection XML export (raw request body, not multipart)."""
-    del user
-    target = _require_library(library_id)
+    target = _require_library(user, library_id)
     data = await request.body()
     if not data:
         raise _error(400, "EMPTY_FILE", "No XML content was uploaded.")
@@ -259,14 +260,14 @@ async def import_rekordbox_xml(
 
     source_id = db.upsert_source(target, "xml", name)
     db.replace_source_tracks(source_id, tracks)
-    LIBRARY.load(LIBRARY.id)
+    LIBRARIES.invalidate(target)
 
     missing = _count_missing_files(tracks)
     return {
         "imported": len(tracks),
         "missing_files": missing,
         "warnings": warnings[:20],
-        "library": LIBRARY.summary(),
+        "library": summary_for(user.id, user.is_admin),
     }
 
 
@@ -278,9 +279,9 @@ async def import_playlist(
     user: auth.CurrentUser = Depends(require_user),
 ) -> dict:
     """Import a playlist exported from rekordbox (raw body, not multipart)."""
-    del user
-    target = _require_library(library_id)
-    if not LIBRARY.is_loaded():
+    target = _require_library(user, library_id)
+    loaded = LIBRARIES.get(target)
+    if not loaded.is_loaded():
         raise _error(
             409,
             "NO_LIBRARY",
@@ -294,13 +295,13 @@ async def import_playlist(
     except PlaylistImportError as exc:
         raise _error(400, "BAD_PLAYLIST", str(exc))
 
-    resolved, missing = resolve_entries(entries, _get_index(), LIBRARY.by_id)
+    resolved, missing = resolve_entries(entries, _get_index(loaded), loaded.by_id)
     if not resolved:
         raise _error(
             400,
             "NOTHING_RESOLVED",
             f"None of the {len(entries)} tracks in that playlist are in "
-            f"“{LIBRARY.name}”. Is it a playlist from a different device?",
+            f"“{loaded.name}”. Is it a playlist from a different device?",
         )
     playlist_id = db.replace_playlist(target, default_name, resolved, len(missing))
     return {
@@ -318,10 +319,10 @@ async def import_playlist(
 
 @app.get("/api/library/playlists")
 def get_playlists(user: auth.CurrentUser = Depends(require_user)) -> dict:
-    del user
-    if LIBRARY.id is None:
+    library_id = db.active_library_id(user.id, user.is_admin)
+    if library_id is None:
         return {"playlists": []}
-    return {"playlists": [p.model_dump() for p in db.list_playlists(LIBRARY.id)]}
+    return {"playlists": [p.model_dump() for p in db.list_playlists(library_id)]}
 
 
 @app.get("/api/library/playlists/{playlist_id}/tracks")
@@ -329,8 +330,7 @@ def get_playlist_tracks(
     playlist_id: int, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
     """What's actually in an imported playlist, in its exported order."""
-    del user
-    library_id = _require_library(None)
+    library_id = _require_library(user, None)
     if playlist_id not in {p.id for p in db.list_playlists(library_id)}:
         raise _error(404, "NO_PLAYLIST", f"No playlist with id {playlist_id}.")
     return {"tracks": [track.model_dump() for track in db.playlist_tracks(playlist_id)]}
@@ -340,8 +340,7 @@ def get_playlist_tracks(
 def remove_playlist(
     playlist_id: int, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
-    library_id = _require_library(None)
+    library_id = _require_library(user, None)
     if not db.delete_playlist(library_id, playlist_id):
         raise _error(404, "NO_PLAYLIST", f"No playlist with id {playlist_id}.")
     return {"playlists": [p.model_dump() for p in db.list_playlists(library_id)]}
@@ -353,8 +352,7 @@ def remove_playlist(
 def start_scan(
     request: ScanRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
-    target = _require_library(request.library_id)
+    target = _require_library(user, request.library_id)
     folder = request.folder.strip().strip("\"'")
     if not folder:
         raise _error(400, "EMPTY_FOLDER", "Enter a folder path to scan.")
@@ -399,10 +397,10 @@ def spotify_playlist(
 def match(
     request: MatchRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
     if SCANNER.is_scanning():
         raise _error(409, "SCAN_IN_PROGRESS", "Wait for the scan to finish.")
-    if not LIBRARY.is_loaded():
+    loaded = _active_library(user)
+    if loaded is None or not loaded.is_loaded():
         raise _error(
             409,
             "NO_LIBRARY",
@@ -410,32 +408,32 @@ def match(
         )
     if not request.tracks:
         raise _error(400, "NO_TRACKS", "The playlist has no tracks.")
-    index = _get_index(request.playlist_id)
+    index = _get_index(loaded, request.playlist_id)
     results = match_playlist(
         request.tracks,
         index,
-        db.preference_map(LIBRARY.id),
-        db.playlist_membership(LIBRARY.id),
+        db.preference_map(loaded.id),
+        db.playlist_membership(loaded.id),
     )
     return {
         "results": [result.model_dump() for result in results],
         "library_size": len(index.items),
-        "library_name": LIBRARY.name,
+        "library_name": loaded.name,
     }
 
 
 # --- remembered version choices --------------------------------------------
 
-def _preferences_payload() -> dict:
-    if LIBRARY.id is None:
+def _preferences_payload(user: auth.CurrentUser) -> dict:
+    library_id = db.active_library_id(user.id, user.is_admin)
+    if library_id is None:
         return {"preferences": []}
-    return {"preferences": [p.model_dump() for p in db.list_preferences(LIBRARY.id)]}
+    return {"preferences": [p.model_dump() for p in db.list_preferences(library_id)]}
 
 
 @app.get("/api/preferences")
 def get_preferences(user: auth.CurrentUser = Depends(require_user)) -> dict:
-    del user
-    return _preferences_payload()
+    return _preferences_payload(user)
 
 
 @app.post("/api/preferences")
@@ -443,9 +441,8 @@ def save_preference(
     request: PreferenceRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
     """Remember this file as the default for this song in the active library."""
-    del user
-    library_id = _require_library(None)
-    if request.track_id not in LIBRARY.by_id:
+    library_id = _require_library(user, None)
+    if request.track_id not in LIBRARIES.get(library_id).by_id:
         raise _error(400, "UNKNOWN_TRACK", f"Unknown track id {request.track_id!r}.")
     db.save_preference(
         library_id,
@@ -455,24 +452,22 @@ def save_preference(
         request.title,
         request.track_id,
     )
-    return _preferences_payload()
+    return _preferences_payload(user)
 
 
 @app.delete("/api/preferences/{preference_id}")
 def forget_preference(
     preference_id: str, user: auth.CurrentUser = Depends(require_user)
 ) -> dict:
-    del user
-    library_id = _require_library(None)
+    library_id = _require_library(user, None)
     if not db.delete_preference(library_id, preference_id):
         raise _error(404, "NO_PREFERENCE", "No remembered choice with that id.")
-    return _preferences_payload()
+    return _preferences_payload(user)
 
 
 @app.delete("/api/preferences")
 def forget_all_preferences(user: auth.CurrentUser = Depends(require_user)) -> dict:
-    del user
-    db.clear_preferences(_require_library(None))
+    db.clear_preferences(_require_library(user, None))
     return {"preferences": []}
 
 
@@ -496,12 +491,12 @@ def _drop_blocked(tracks: list, couple_id: int | None) -> list:
 def export(
     request: ExportRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> Response:
-    del user
-    if not LIBRARY.is_loaded():
+    loaded = _active_library(user)
+    if loaded is None or not loaded.is_loaded():
         raise _error(409, "NO_LIBRARY", "Add a library first.")
     tracks = []
     for track_id in request.track_ids:
-        track = LIBRARY.by_id.get(track_id)
+        track = loaded.by_id.get(track_id)
         if track is None:
             raise _error(400, "UNKNOWN_TRACK", f"Unknown track id {track_id!r}.")
         tracks.append(track)
@@ -560,14 +555,16 @@ def export_missing(
     request: MissingExportRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> Response:
     """The playlist's tracks that this library doesn't have — a shopping list."""
-    del user
     tracks = request.tracks
     if request.couple_id is not None:
         keys = couples.blocked_keys(request.couple_id)
         tracks = [t for t in tracks if not couples.is_blocked(t.artist, t.title, keys)]
     if not tracks:
         raise _error(400, "NO_TRACKS", "Nothing is missing — there's nothing to list.")
-    content = build_missing_txt(request.name, LIBRARY.name, tracks)
+    loaded = _active_library(user)
+    content = build_missing_txt(
+        request.name, loaded.name if loaded else None, tracks
+    )
     stem = _safe_filename(request.name)
     return Response(
         content=content.encode("utf-8"),

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import server.main as main
 from server import db
+from server.library import LIBRARIES
 from server.scanner.scan import Scanner
 from server.spotify import search as spotify_search
 from tests.helpers import auth_env, make_audio_tree, sign_in_admin
@@ -31,7 +32,8 @@ TRACK = {
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "library.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
-    monkeypatch.setattr(main, "_index_cache", None)
+    monkeypatch.setattr(main, "_index_cache", {})
+    LIBRARIES.invalidate()
     auth_env(monkeypatch)
     spotify_search.reset()
     with TestClient(main.app) as client:

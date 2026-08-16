@@ -29,6 +29,7 @@ export interface Source {
 export interface LibraryInfo {
   id: number;
   name: string;
+  owner_id: number | null;   // users.id; null = pre-auth row, admin-only
   created_at: string;
   track_count: number;
   source_count: number;
@@ -56,12 +57,12 @@ export interface ScanReport {
 export interface ScanStatus {
   state: 'idle' | 'scanning' | 'done' | 'error';
   folder?: string;
+  library_id?: number;
   found?: number;
   parsed?: number;
   from_cache?: number;
   skipped_drm?: number;
   errors?: { file: string; message: string }[];
-  library?: LibrarySummary;
   scanned?: ScanReport;
   message?: string;
 }
