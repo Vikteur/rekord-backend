@@ -476,6 +476,15 @@ def _safe_filename(name: str) -> str:
     return cleaned or "playlist"
 
 
+def _require_couple_visible(user: auth.CurrentUser, couple_id: int | None) -> None:
+    """An export may only reference a couple its caller could open."""
+    if couple_id is None:
+        return
+    couple = couples.get_couple(couple_id)
+    if couple is None or not (user.is_admin or couple["dj_id"] == user.id):
+        raise _error(404, "NO_COUPLE", f"No couple with id {couple_id}.")
+
+
 def _drop_blocked(tracks: list, couple_id: int | None) -> list:
     """A couple's never list keeps its songs out of *every* export for them."""
     if couple_id is None:
@@ -491,6 +500,7 @@ def _drop_blocked(tracks: list, couple_id: int | None) -> list:
 def export(
     request: ExportRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> Response:
+    _require_couple_visible(user, request.couple_id)
     loaded = _active_library(user)
     if loaded is None or not loaded.is_loaded():
         raise _error(409, "NO_LIBRARY", "Add a library first.")
@@ -555,6 +565,7 @@ def export_missing(
     request: MissingExportRequest, user: auth.CurrentUser = Depends(require_user)
 ) -> Response:
     """The playlist's tracks that this library doesn't have — a shopping list."""
+    _require_couple_visible(user, request.couple_id)
     tracks = request.tracks
     if request.couple_id is not None:
         keys = couples.blocked_keys(request.couple_id)

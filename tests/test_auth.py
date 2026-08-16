@@ -227,6 +227,96 @@ def test_the_admin_account_is_protected(client: TestClient) -> None:
         assert response.json()["detail"]["code"] == "LAST_ADMIN"
 
 
+def make_couple(client: TestClient, names: str = "Sofie & Jan") -> dict:
+    response = client.post(
+        "/api/couples", json={"names": names, "wedding_date": "2027-05-25"}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+# --- couples belong to their DJ ----------------------------------------------
+
+def test_djs_see_only_their_own_couples(client: TestClient) -> None:
+    admin_couple = make_couple(client)
+    create_dj(client)
+
+    sign_in(client, DJ_CREDS)
+    make_couple(client, "Kim & Alex")
+    listed = client.get("/api/couples").json()["couples"]
+    assert [couple["names"] for couple in listed] == ["Kim & Alex"]
+
+    # The admin's couple answers 404 like a missing one — no id probing.
+    foreign = admin_couple["id"]
+    assert client.get(f"/api/couples/{foreign}").status_code == 404
+    assert client.patch(
+        f"/api/couples/{foreign}", json={"names": "Hijacked"}
+    ).status_code == 404
+    assert client.delete(f"/api/couples/{foreign}").status_code == 404
+    assert client.post(
+        f"/api/couples/{foreign}/tokens/couple/rotate"
+    ).status_code == 404
+    # Exports can't borrow another DJ's couple (never list) either.
+    blocked = client.post(
+        "/api/export/missing",
+        json={"name": "x", "tracks": [{"artist": "A", "title": "T"}],
+              "couple_id": foreign},
+    )
+    assert blocked.status_code == 404
+
+    sign_in(client, ADMIN_CREDS)
+    names = {couple["names"] for couple in client.get("/api/couples").json()["couples"]}
+    assert names == {"Sofie & Jan", "Kim & Alex"}
+
+
+def test_dj_cannot_create_a_couple_for_someone_else(client: TestClient) -> None:
+    admin_id = client.get("/api/me").json()["user"]["id"]
+    create_dj(client)
+    sign_in(client, DJ_CREDS)
+    refused = client.post(
+        "/api/couples",
+        json={"names": "X & Y", "wedding_date": "2027-01-01", "dj_id": admin_id},
+    )
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["code"] == "FORBIDDEN"
+
+
+def test_admin_reassigns_a_couple(client: TestClient) -> None:
+    create_dj(client)
+    couple = make_couple(client)
+    dj_id = next(
+        u["id"] for u in client.get("/api/users").json()["users"]
+        if u["username"] == "sarah"
+    )
+
+    detail = client.patch(
+        f"/api/couples/{couple['id']}", json={"dj_id": dj_id}
+    ).json()
+    assert detail["dj_id"] == dj_id
+    assert detail["dj_name"] == "Sarah V."
+    assert any(
+        "handed this wedding" in change["summary"] for change in detail["changes"]
+    )
+
+    # The couple now shows up for its new DJ...
+    sign_in(client, DJ_CREDS)
+    assert [c["names"] for c in client.get("/api/couples").json()["couples"]] == [
+        "Sofie & Jan"
+    ]
+    # ...but a DJ can't reassign it onward.
+    refused = client.patch(f"/api/couples/{couple['id']}", json={"dj_id": 999})
+    assert refused.status_code == 403
+
+
+def test_guest_links_work_without_any_session(client: TestClient) -> None:
+    couple = make_couple(client)
+    token = couple["links"]["couple"]["token"]
+    client.post("/api/auth/logout")
+    state = client.get(f"/api/guest/{token}")
+    assert state.status_code == 200
+    assert state.json()["scope"] == "couple"
+
+
 def test_deleting_a_dj(client: TestClient) -> None:
     create_dj(client)
     dj_id = next(
