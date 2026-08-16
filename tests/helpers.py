@@ -1,8 +1,13 @@
-"""Programmatic audio fixtures — no ffmpeg, no checked-in binaries.
+"""Shared test fixtures: sign-in plumbing and programmatic audio files.
 
-silent_mp3_bytes hand-assembles valid MPEG-1 Layer III frames (mutagen only
-parses headers, so zeroed frame bodies are fine). write_wav uses the stdlib
-`wave` module for files with exact durations.
+Auth: every API fixture bootstraps the admin from env (`auth_env`) and signs
+in once (`sign_in_admin`) — the TestClient keeps the session cookie, so
+existing tests run unchanged against the now-guarded routes.
+
+Audio: no ffmpeg, no checked-in binaries. silent_mp3_bytes hand-assembles
+valid MPEG-1 Layer III frames (mutagen only parses headers, so zeroed frame
+bodies are fine). write_wav uses the stdlib `wave` module for files with
+exact durations.
 """
 
 import struct
@@ -12,6 +17,20 @@ from pathlib import Path
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3, TKEY, TXXX
 from mutagen.mp3 import MP3
+
+ADMIN_CREDS = {"username": "admin", "password": "correct-horse-battery"}
+
+
+def auth_env(monkeypatch) -> None:
+    """Make the app lifespan bootstrap the test admin account."""
+    monkeypatch.setenv("ADMIN_USERNAME", ADMIN_CREDS["username"])
+    monkeypatch.setenv("ADMIN_PASSWORD", ADMIN_CREDS["password"])
+
+
+def sign_in_admin(client) -> None:
+    response = client.post("/api/auth/login", json=ADMIN_CREDS)
+    assert response.status_code == 200, response.text
+
 
 # MPEG-1 Layer III, 32 kbps (bitrate index 1), 44100 Hz (index 0), mono.
 _FRAME_HEADER = bytes([0xFF, 0xFB, 0x10, 0xC0])

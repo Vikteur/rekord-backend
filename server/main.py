@@ -8,7 +8,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from server import couples, db
+from server import auth, couples, db
+from server.auth_api import router as auth_router
 from server.couples_api import router as couples_router
 from server.export.m3u8 import build_m3u8
 from server.export.missing import build_missing_txt
@@ -38,7 +39,9 @@ from server.spotify.parse_embed import (
 async def lifespan(_: FastAPI):
     # Restore the active library from disk so a restart needs no rescan.
     db.init()
+    auth.init()
     couples.init()
+    auth.ensure_admin_from_env()
     LIBRARY.load()
     yield
 
@@ -521,6 +524,9 @@ def export_missing(request: MissingExportRequest) -> Response:
         },
     )
 
+
+# Sign-in, sessions and DJ-account management.
+app.include_router(auth_router)
 
 # Couple intake + guest magic-link routes.
 app.include_router(couples_router)
