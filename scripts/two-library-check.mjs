@@ -3,6 +3,7 @@
 // versions are scoped to the selected one.
 // Usage: node scripts/two-library-check.mjs <macbook-folder> <studio-folder>
 import { chromium } from 'playwright-core';
+import { addSession } from './signin.mjs';
 
 const [MAC, STUDIO] = process.argv.slice(2);
 if (!MAC || !STUDIO) {
@@ -15,6 +16,7 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
 const url = process.env.APP_URL ?? 'http://127.0.0.1:8000/';
+await addSession(page.context(), url); // SMOKE_USERNAME/SMOKE_PASSWORD
 await page.goto(url);
 
 async function createLibrary(name, folder) {

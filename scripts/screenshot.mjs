@@ -2,6 +2,7 @@
 // Usage: node scripts/screenshot.mjs <music-folder> [out.png]
 // Requires the app on http://127.0.0.1:8000 (npm run build && npm start).
 import { chromium } from 'playwright-core';
+import { addSession } from './signin.mjs';
 
 const MUSIC = process.argv[2];
 const OUT = process.argv[3] ?? 'docs/screenshot.png';
@@ -14,7 +15,9 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || undefined,
 });
 const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
-await page.goto(process.env.APP_URL ?? 'http://127.0.0.1:8000/');
+const url = process.env.APP_URL ?? 'http://127.0.0.1:8000/';
+await addSession(page.context(), url); // SMOKE_USERNAME/SMOKE_PASSWORD
+await page.goto(url);
 
 // Only scan when the saved library is empty — normally it is restored from the database.
 if (await page.getByText('Nothing loaded yet').isVisible().catch(() => false)) {

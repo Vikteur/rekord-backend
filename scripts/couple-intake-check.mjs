@@ -6,17 +6,29 @@
 // mocked in the browser (no credentials needed); every save hits the real server.
 // The couple is deleted at the end, so the DJ's data stays untouched.
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { chromium } from 'playwright-core';
+import { SMOKE_CREDS, signIn } from './signin.mjs';
 
 const PORT = 8123;
 const URL = `http://127.0.0.1:${PORT}`;
 const OUT = '.cache/couple-intake';
 mkdirSync(OUT, { recursive: true });
 
+// A throwaway database with a bootstrapped smoke admin: the check exercises
+// the real server without ever touching the real data/library.db.
+const SMOKE_DB = `${OUT}/smoke.db`;
+rmSync(SMOKE_DB, { force: true });
+
 const api = spawn('python', ['-m', 'uvicorn', 'server.main:app', '--port', String(PORT)], {
   cwd: process.cwd(),
   stdio: 'ignore',
+  env: {
+    ...process.env,
+    REKORD_DB: SMOKE_DB,
+    ADMIN_USERNAME: SMOKE_CREDS.username,
+    ADMIN_PASSWORD: SMOKE_CREDS.password,
+  },
 });
 
 async function waitFor(fn, msg, timeout = 25000) {
@@ -40,6 +52,7 @@ const HITS = [
 
 let browser;
 let coupleId;
+let authed = {}; // session cookie header once signed in — used by cleanup too
 let ok = 0;
 let fail = 0;
 const check = (condition, label) => {
@@ -55,11 +68,16 @@ const check = (condition, label) => {
 try {
   await waitFor(async () => (await fetch(`${URL}/api/health`)).ok, 'server up');
 
+  // DJ routes need a session now; guest pages below stay cookie-free.
+  const session = await signIn(URL);
+  authed = { Cookie: `rm_session=${session}` };
+  check(Boolean(session), 'smoke admin signed in');
+
   const future = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
   const created = await (
     await fetch(`${URL}/api/couples`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authed },
       body: JSON.stringify({ names: 'Sofie & Jan', wedding_date: future }),
     })
   ).json();
@@ -175,7 +193,9 @@ try {
   await friendPage.screenshot({ path: `${OUT}/10-friend-view.png` });
 
   // --- server state: everything really persisted -----------------------------
-  const detail = await (await fetch(`${URL}/api/couples/${coupleId}`)).json();
+  const detail = await (
+    await fetch(`${URL}/api/couples/${coupleId}`, { headers: authed })
+  ).json();
   check(detail.lists.opening_dance.length === 1, 'opening dance persisted');
   check(detail.lists.opening_dance[0].start_pref === 'chorus', 'start preference persisted');
   check(detail.lists.opening_dance[0].note?.includes('Album version'), 'opening note persisted');
@@ -194,6 +214,7 @@ try {
 
   // --- DJ panel --------------------------------------------------------------
   const dj = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  await dj.context().addCookies([{ name: 'rm_session', value: session, url: URL }]);
   await dj.goto(URL, { waitUntil: 'networkidle' });
   await dj.getByRole('button', { name: /Sofie & Jan/ }).click();
   await dj.getByText('Magic links').waitFor();
@@ -210,7 +231,10 @@ try {
   process.exitCode = fail ? 1 : 0;
 } finally {
   if (coupleId != null) {
-    await fetch(`${URL}/api/couples/${coupleId}`, { method: 'DELETE' }).catch(() => undefined);
+    await fetch(`${URL}/api/couples/${coupleId}`, {
+      method: 'DELETE',
+      headers: authed,
+    }).catch(() => undefined);
   }
   await browser?.close();
   api.kill();

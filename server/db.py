@@ -18,6 +18,7 @@ disk. A connection is opened per call because scans run on a background
 thread and sqlite3 connections are not shareable across threads.
 """
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +31,13 @@ from server.models import (
     Source,
 )
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "library.db"
+# REKORD_DB points smoke checks (scripts/*.mjs) at a throwaway database so
+# they never touch the real one; normal runs never set it.
+DB_PATH = (
+    Path(os.environ["REKORD_DB"])
+    if os.environ.get("REKORD_DB")
+    else Path(__file__).resolve().parent.parent / "data" / "library.db"
+)
 
 SCHEMA_VERSION = 6
 

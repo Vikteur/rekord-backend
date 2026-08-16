@@ -1,6 +1,7 @@
 // Clicks an imported playlist open and reports what the user sees.
 // Usage: node scripts/playlist-open-check.mjs <music-folder>
 import { chromium } from 'playwright-core';
+import { addSession } from './signin.mjs';
 
 const MUSIC = process.argv[2];
 if (!MUSIC) {
@@ -12,7 +13,9 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || undefined,
 });
 const page = await browser.newPage({ viewport: { width: 1200, height: 1000 } });
-await page.goto(process.env.APP_URL ?? 'http://127.0.0.1:8000/');
+const url = process.env.APP_URL ?? 'http://127.0.0.1:8000/';
+await addSession(page.context(), url); // SMOKE_USERNAME/SMOKE_PASSWORD
+await page.goto(url);
 await page.getByText(/tracks saved/).waitFor({ timeout: 60000 });
 
 const row = page.locator('details', { has: page.getByText('Most played 2026') }).first();

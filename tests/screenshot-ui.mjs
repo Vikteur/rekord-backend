@@ -69,6 +69,11 @@ try {
   await page.route('**/api/**', (route) => {
     const url = route.request().url();
     if (url.endsWith('/api/preferences')) return route.fulfill(json({ preferences: [] }));
+    // The auth gate asks who is signed in before the shell mounts.
+    if (url.endsWith('/api/me')) {
+      return route.fulfill(json({ user: { id: 1, username: 'viktor', display_name: 'Viktor', role: 'admin' } }));
+    }
+    if (url.endsWith('/api/users')) return route.fulfill(json({ users: [] }));
     if (url.includes('/api/couples')) return route.fulfill(json({ couples: [] }));
     if (url.includes('/api/library/playlists')) return route.fulfill(json({ playlists: [] }));
     if (url.includes('/api/library')) return route.fulfill(json(library));

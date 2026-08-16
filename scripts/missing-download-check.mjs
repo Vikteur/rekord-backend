@@ -3,6 +3,7 @@
 // Usage: node scripts/missing-download-check.mjs <music-folder>
 import { chromium } from 'playwright-core';
 import { readFile } from 'node:fs/promises';
+import { addSession } from './signin.mjs';
 
 const MUSIC = process.argv[2];
 if (!MUSIC) {
@@ -14,7 +15,9 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || undefined,
 });
 const page = await browser.newPage({ acceptDownloads: true });
-await page.goto(process.env.APP_URL ?? 'http://127.0.0.1:8000/');
+const url = process.env.APP_URL ?? 'http://127.0.0.1:8000/';
+await addSession(page.context(), url); // SMOKE_USERNAME/SMOKE_PASSWORD
+await page.goto(url);
 
 if (await page.getByText('Nothing loaded yet').isVisible().catch(() => false)) {
   await page.getByPlaceholder(/Music/).fill(MUSIC);
