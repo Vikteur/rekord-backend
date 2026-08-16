@@ -3,13 +3,13 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from server import auth, couples, db
-from server.auth_api import router as auth_router
+from server.auth_api import require_user, router as auth_router
 from server.couples_api import router as couples_router
 from server.export.m3u8 import build_m3u8
 from server.export.missing import build_missing_txt
@@ -164,12 +164,16 @@ def _require_library(library_id: int | None) -> int:
 
 
 @app.get("/api/library")
-def library() -> dict:
+def library(user: auth.CurrentUser = Depends(require_user)) -> dict:
+    del user
     return LIBRARY.summary()
 
 
 @app.post("/api/libraries", status_code=201)
-def create_library(request: LibraryRequest) -> dict:
+def create_library(
+    request: LibraryRequest, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     name = request.name.strip()
     if not name:
         raise _error(400, "EMPTY_NAME", "Give the library a name.")
@@ -182,7 +186,10 @@ def create_library(request: LibraryRequest) -> dict:
 
 
 @app.post("/api/libraries/{library_id}/select")
-def select_library(library_id: int) -> dict:
+def select_library(
+    library_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     if not db.library_exists(library_id):
         raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
     LIBRARY.load(library_id)
@@ -190,7 +197,11 @@ def select_library(library_id: int) -> dict:
 
 
 @app.patch("/api/libraries/{library_id}")
-def rename_library(library_id: int, request: LibraryRequest) -> dict:
+def rename_library(
+    library_id: int, request: LibraryRequest,
+    user: auth.CurrentUser = Depends(require_user),
+) -> dict:
+    del user
     name = request.name.strip()
     if not name:
         raise _error(400, "EMPTY_NAME", "Give the library a name.")
@@ -205,7 +216,10 @@ def rename_library(library_id: int, request: LibraryRequest) -> dict:
 
 
 @app.delete("/api/libraries/{library_id}")
-def delete_library(library_id: int) -> dict:
+def delete_library(
+    library_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     if not db.delete_library(library_id):
         raise _error(404, "NO_LIBRARY", f"No library with id {library_id}.")
     LIBRARY.load(None if LIBRARY.id == library_id else LIBRARY.id)
@@ -215,7 +229,10 @@ def delete_library(library_id: int) -> dict:
 # --- library sources -------------------------------------------------------
 
 @app.delete("/api/library/sources/{source_id}")
-def remove_source(source_id: int) -> dict:
+def remove_source(
+    source_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     if not db.delete_source(source_id):
         raise _error(404, "NO_SOURCE", f"No library source with id {source_id}.")
     LIBRARY.load(LIBRARY.id)
@@ -224,9 +241,11 @@ def remove_source(source_id: int) -> dict:
 
 @app.post("/api/library/xml")
 async def import_rekordbox_xml(
-    request: Request, name: str = "rekordbox.xml", library_id: int | None = None
+    request: Request, name: str = "rekordbox.xml", library_id: int | None = None,
+    user: auth.CurrentUser = Depends(require_user),
 ) -> dict:
     """Import a rekordbox collection XML export (raw request body, not multipart)."""
+    del user
     target = _require_library(library_id)
     data = await request.body()
     if not data:
@@ -255,9 +274,11 @@ async def import_rekordbox_xml(
 
 @app.post("/api/library/playlists")
 async def import_playlist(
-    request: Request, name: str = "", library_id: int | None = None
+    request: Request, name: str = "", library_id: int | None = None,
+    user: auth.CurrentUser = Depends(require_user),
 ) -> dict:
     """Import a playlist exported from rekordbox (raw body, not multipart)."""
+    del user
     target = _require_library(library_id)
     if not LIBRARY.is_loaded():
         raise _error(
@@ -296,15 +317,19 @@ async def import_playlist(
 
 
 @app.get("/api/library/playlists")
-def get_playlists() -> dict:
+def get_playlists(user: auth.CurrentUser = Depends(require_user)) -> dict:
+    del user
     if LIBRARY.id is None:
         return {"playlists": []}
     return {"playlists": [p.model_dump() for p in db.list_playlists(LIBRARY.id)]}
 
 
 @app.get("/api/library/playlists/{playlist_id}/tracks")
-def get_playlist_tracks(playlist_id: int) -> dict:
+def get_playlist_tracks(
+    playlist_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
     """What's actually in an imported playlist, in its exported order."""
+    del user
     library_id = _require_library(None)
     if playlist_id not in {p.id for p in db.list_playlists(library_id)}:
         raise _error(404, "NO_PLAYLIST", f"No playlist with id {playlist_id}.")
@@ -312,7 +337,10 @@ def get_playlist_tracks(playlist_id: int) -> dict:
 
 
 @app.delete("/api/library/playlists/{playlist_id}")
-def remove_playlist(playlist_id: int) -> dict:
+def remove_playlist(
+    playlist_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     library_id = _require_library(None)
     if not db.delete_playlist(library_id, playlist_id):
         raise _error(404, "NO_PLAYLIST", f"No playlist with id {playlist_id}.")
@@ -322,7 +350,10 @@ def remove_playlist(playlist_id: int) -> dict:
 # --- folder scanning -------------------------------------------------------
 
 @app.post("/api/scan", status_code=202)
-def start_scan(request: ScanRequest) -> dict:
+def start_scan(
+    request: ScanRequest, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     target = _require_library(request.library_id)
     folder = request.folder.strip().strip("\"'")
     if not folder:
@@ -340,14 +371,18 @@ def start_scan(request: ScanRequest) -> dict:
 
 
 @app.get("/api/scan/status")
-def scan_status() -> dict:
+def scan_status(user: auth.CurrentUser = Depends(require_user)) -> dict:
+    del user
     return SCANNER.status()
 
 
 # --- playlist, matching, export --------------------------------------------
 
 @app.post("/api/spotify/playlist")
-def spotify_playlist(request: PlaylistRequest) -> dict:
+def spotify_playlist(
+    request: PlaylistRequest, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     try:
         playlist_id = parse_playlist_url(request.url)
     except BadPlaylistUrl as exc:
@@ -361,7 +396,10 @@ def spotify_playlist(request: PlaylistRequest) -> dict:
 
 
 @app.post("/api/match")
-def match(request: MatchRequest) -> dict:
+def match(
+    request: MatchRequest, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     if SCANNER.is_scanning():
         raise _error(409, "SCAN_IN_PROGRESS", "Wait for the scan to finish.")
     if not LIBRARY.is_loaded():
@@ -395,13 +433,17 @@ def _preferences_payload() -> dict:
 
 
 @app.get("/api/preferences")
-def get_preferences() -> dict:
+def get_preferences(user: auth.CurrentUser = Depends(require_user)) -> dict:
+    del user
     return _preferences_payload()
 
 
 @app.post("/api/preferences")
-def save_preference(request: PreferenceRequest) -> dict:
+def save_preference(
+    request: PreferenceRequest, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
     """Remember this file as the default for this song in the active library."""
+    del user
     library_id = _require_library(None)
     if request.track_id not in LIBRARY.by_id:
         raise _error(400, "UNKNOWN_TRACK", f"Unknown track id {request.track_id!r}.")
@@ -417,7 +459,10 @@ def save_preference(request: PreferenceRequest) -> dict:
 
 
 @app.delete("/api/preferences/{preference_id}")
-def forget_preference(preference_id: str) -> dict:
+def forget_preference(
+    preference_id: str, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     library_id = _require_library(None)
     if not db.delete_preference(library_id, preference_id):
         raise _error(404, "NO_PREFERENCE", "No remembered choice with that id.")
@@ -425,7 +470,8 @@ def forget_preference(preference_id: str) -> dict:
 
 
 @app.delete("/api/preferences")
-def forget_all_preferences() -> dict:
+def forget_all_preferences(user: auth.CurrentUser = Depends(require_user)) -> dict:
+    del user
     db.clear_preferences(_require_library(None))
     return {"preferences": []}
 
@@ -447,7 +493,10 @@ def _drop_blocked(tracks: list, couple_id: int | None) -> list:
 
 
 @app.post("/api/export")
-def export(request: ExportRequest) -> Response:
+def export(
+    request: ExportRequest, user: auth.CurrentUser = Depends(require_user)
+) -> Response:
+    del user
     if not LIBRARY.is_loaded():
         raise _error(409, "NO_LIBRARY", "Add a library first.")
     tracks = []
@@ -484,8 +533,9 @@ def export(request: ExportRequest) -> Response:
 
 
 @app.get("/api/export/skipped")
-def export_skipped() -> Response:
+def export_skipped(user: auth.CurrentUser = Depends(require_user)) -> Response:
     """What the last scan could not use: DRM-locked and unreadable files."""
+    del user
     status = SCANNER.status()
     scanned = status.get("scanned") or {}
     errors = status.get("errors") or []
@@ -506,8 +556,11 @@ def export_skipped() -> Response:
 
 
 @app.post("/api/export/missing")
-def export_missing(request: MissingExportRequest) -> Response:
+def export_missing(
+    request: MissingExportRequest, user: auth.CurrentUser = Depends(require_user)
+) -> Response:
     """The playlist's tracks that this library doesn't have — a shopping list."""
+    del user
     tracks = request.tracks
     if request.couple_id is not None:
         keys = couples.blocked_keys(request.couple_id)

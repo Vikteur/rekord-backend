@@ -12,7 +12,7 @@ import server.main as main
 from server import db
 from server.scanner.scan import Scanner
 from server.spotify import search as spotify_search
-from tests.helpers import make_audio_tree
+from tests.helpers import auth_env, make_audio_tree, sign_in_admin
 
 FUTURE = (date.today() + timedelta(days=90)).isoformat()
 PAST = (date.today() - timedelta(days=2)).isoformat()
@@ -32,8 +32,10 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "library.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
     monkeypatch.setattr(main, "_index_cache", None)
+    auth_env(monkeypatch)
     spotify_search.reset()
     with TestClient(main.app) as client:
+        sign_in_admin(client)
         yield client
     spotify_search.reset()
 

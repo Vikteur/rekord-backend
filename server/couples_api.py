@@ -17,10 +17,11 @@ Two audiences share this router:
 
 import sqlite3
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from server import couples
+from server import auth, couples
+from server.auth_api import require_user
 from server.spotify import search as spotify_search
 
 router = APIRouter()
@@ -133,7 +134,10 @@ def _guest_payload(couple: sqlite3.Row, scope: str) -> dict:
 # --- DJ routes --------------------------------------------------------------
 
 @router.post("/api/couples", status_code=201)
-def create_couple(request: CoupleCreate) -> dict:
+def create_couple(
+    request: CoupleCreate, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     try:
         couple_id = couples.create_couple(request.names, request.wedding_date)
     except couples.CoupleError as exc:
@@ -142,7 +146,8 @@ def create_couple(request: CoupleCreate) -> dict:
 
 
 @router.get("/api/couples")
-def get_couples() -> dict:
+def get_couples(user: auth.CurrentUser = Depends(require_user)) -> dict:
+    del user
     return {"couples": couples.list_couples()}
 
 
@@ -154,12 +159,19 @@ def _require_couple(couple_id: int) -> sqlite3.Row:
 
 
 @router.get("/api/couples/{couple_id}")
-def get_couple(couple_id: int) -> dict:
+def get_couple(
+    couple_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     return _couple_detail(_require_couple(couple_id))
 
 
 @router.patch("/api/couples/{couple_id}")
-def update_couple(couple_id: int, request: CoupleUpdate) -> dict:
+def update_couple(
+    couple_id: int, request: CoupleUpdate,
+    user: auth.CurrentUser = Depends(require_user),
+) -> dict:
+    del user
     _require_couple(couple_id)
     try:
         couples.update_couple(
@@ -174,14 +186,20 @@ def update_couple(couple_id: int, request: CoupleUpdate) -> dict:
 
 
 @router.delete("/api/couples/{couple_id}")
-def delete_couple(couple_id: int) -> dict:
+def delete_couple(
+    couple_id: int, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     if not couples.delete_couple(couple_id):
         raise _error(404, "NO_COUPLE", f"No couple with id {couple_id}.")
     return {"couples": couples.list_couples()}
 
 
 @router.post("/api/couples/{couple_id}/tokens/{token_kind}/rotate")
-def rotate_token(couple_id: int, token_kind: str) -> dict:
+def rotate_token(
+    couple_id: int, token_kind: str, user: auth.CurrentUser = Depends(require_user)
+) -> dict:
+    del user
     _require_couple(couple_id)
     try:
         couples.rotate_token(couple_id, token_kind)
@@ -192,7 +210,11 @@ def rotate_token(couple_id: int, token_kind: str) -> dict:
 
 
 @router.post("/api/couples/{couple_id}/tokens/{token_kind}/revoke")
-def revoke_token(couple_id: int, token_kind: str, request: RevokeRequest) -> dict:
+def revoke_token(
+    couple_id: int, token_kind: str, request: RevokeRequest,
+    user: auth.CurrentUser = Depends(require_user),
+) -> dict:
+    del user
     _require_couple(couple_id)
     try:
         couples.set_revoked(couple_id, token_kind, request.revoked)
@@ -204,7 +226,11 @@ def revoke_token(couple_id: int, token_kind: str, request: RevokeRequest) -> dic
 
 
 @router.get("/api/couples/{couple_id}/changes")
-def get_changes(couple_id: int, limit: int = 100) -> dict:
+def get_changes(
+    couple_id: int, limit: int = 100,
+    user: auth.CurrentUser = Depends(require_user),
+) -> dict:
+    del user
     _require_couple(couple_id)
     return {"changes": couples.list_changes(couple_id, limit=min(limit, 500))}
 

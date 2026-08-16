@@ -1,9 +1,11 @@
 """Accounts and sessions: sign-in, the rate limit, admin-only user management,
 and (once routes are guarded) that no API route is reachable signed out."""
 
+import re
 from pathlib import Path
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 import server.main as main
@@ -109,6 +111,41 @@ def test_login_rate_limit_counts_failures_only(anon_client: TestClient) -> None:
     blocked = anon_client.post("/api/auth/login", json=ADMIN_CREDS)
     assert blocked.status_code == 429
     assert blocked.json()["detail"]["code"] == "RATE_LIMITED"
+
+
+# --- the guard net -----------------------------------------------------------
+
+# Deliberately open: health is polled by deploys, login/logout must work
+# signed out, and guest magic-link routes carry their login in the URL.
+OPEN_API_PATHS = {"/api/health", "/api/auth/login", "/api/auth/logout"}
+
+
+def _api_routes(routes):
+    """All APIRoutes, descending into included routers (not flattened here)."""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        elif hasattr(route, "original_router"):  # an included APIRouter
+            yield from _api_routes(route.original_router.routes)
+        elif hasattr(route, "routes"):
+            yield from _api_routes(route.routes)
+
+
+def test_every_other_api_route_requires_sign_in(anon_client: TestClient) -> None:
+    """The net that catches a future route added without `require_user`."""
+    checked = 0
+    for route in _api_routes(main.app.routes):
+        if not route.path.startswith("/api"):
+            continue
+        if route.path in OPEN_API_PATHS or route.path.startswith("/api/guest/"):
+            continue
+        url = re.sub(r"\{[^}]+\}", "1", route.path)
+        for method in route.methods - {"HEAD", "OPTIONS"}:
+            response = anon_client.request(method, url, json={})
+            assert response.status_code == 401, (method, url, response.status_code)
+            assert response.json()["detail"]["code"] == "NOT_SIGNED_IN"
+            checked += 1
+    assert checked >= 25  # the whole DJ API, not an accidentally empty loop
 
 
 # --- admin: DJ accounts ------------------------------------------------------

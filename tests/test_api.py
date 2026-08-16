@@ -9,7 +9,7 @@ from server import db
 from server.library import LIBRARY
 from server.scanner.scan import Scanner
 from server.spotify.fetch import SpotifyFetchError
-from tests.helpers import make_audio_tree, write_mp3
+from tests.helpers import auth_env, make_audio_tree, sign_in_admin, write_mp3
 from tests.test_rekordbox_import import collection_xml
 
 
@@ -18,7 +18,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "library.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
     monkeypatch.setattr(main, "_index_cache", None)
+    auth_env(monkeypatch)
     with TestClient(main.app) as client:  # runs the startup hook (db.init + load)
+        sign_in_admin(client)
         client.post("/api/libraries", json={"name": "MacBook"})
         yield client
 
@@ -29,7 +31,9 @@ def bare_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "bare.db")
     monkeypatch.setattr(main, "SCANNER", Scanner())
     monkeypatch.setattr(main, "_index_cache", None)
+    auth_env(monkeypatch)
     with TestClient(main.app) as client:
+        sign_in_admin(client)
         yield client
 
 
@@ -95,6 +99,7 @@ def test_library_persists_across_restart(client: TestClient, library: Path) -> N
 
     # A brand new client over the same database file — no rescan.
     with TestClient(main.app) as restarted:
+        sign_in_admin(restarted)
         summary = restarted.get("/api/library").json()
         assert summary["track_count"] == 6
         assert summary["sources"][0]["kind"] == "folder"
@@ -229,6 +234,7 @@ def test_preference_survives_a_restart(client: TestClient, library: Path) -> Non
     )
 
     with TestClient(main.app) as restarted:
+        sign_in_admin(restarted)
         again = restarted.post(
             "/api/match",
             json={"tracks": [{"index": 0, "artist": "Étienne de Crécy", "title": "Am I Wrong"}]},
