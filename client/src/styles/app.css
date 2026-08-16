@@ -1290,3 +1290,28 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- QR badge ---------------------------------------------------------------
+   Always white with black modules regardless of theme: scanners need the
+   contrast and the quiet zone, booth mode included. */
+.qr-card {
+  margin: 8px 0 0;
+  padding: 10px;
+  width: fit-content;
+  background: #ffffff;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-card);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.qr-card svg {
+  display: block;
+}
+.qr-caption {
+  font-size: 11px;
+  color: #57606b; /* fixed: sits on the always-white card */
+  text-align: center;
+  max-width: 180px;
+}

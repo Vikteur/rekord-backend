@@ -5,6 +5,7 @@ import { formatDuration } from '../format';
 import { useApp } from '../store';
 import type { CoupleDetail, CoupleEntry, ListKind, UserAccount } from '../types';
 import { useUi } from '../ui/UiContext';
+import { QrBadge } from '../components/QrBadge';
 import { Panel } from './Panel';
 
 /** The chapters a couple fills in, in intake order, with the DJ-side labels. */
@@ -342,6 +343,15 @@ export function CouplesPanel() {
                 {link.expired && <span className="warn"> · expired (wedding passed)</span>}
               </span>
               <CopyField value={url} disabled={link.revoked || link.expired} />
+              {kind === 'friends' && !link.revoked && !link.expired && (
+                <>
+                  <QrBadge url={url} />
+                  <p className="hint">
+                    Print or show this QR — friends scan it and their picks land
+                    straight in the friends&rsquo; top 20.
+                  </p>
+                </>
+              )}
               <div className="field-row">
                 <button className="btn btn-sm" onClick={() => tokenAction(couple, kind, 'rotate')}>
                   Rotate link

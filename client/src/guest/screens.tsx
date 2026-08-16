@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { QrBadge } from '../components/QrBadge';
 import type { StartPref } from '../types';
 import { SongSearch } from './SongSearch';
 import { CopyLink, RevealRow, SongCard, SongTable } from './parts';
@@ -254,6 +255,10 @@ export function FriendsScreen() {
         <>
           <label className="g-label">The link to share</label>
           <CopyLink url={link} />
+          <QrBadge
+            url={link}
+            label="Or let friends scan this — same link, no typing."
+          />
         </>
       )}
       <p className="g-count mono">{count} / 20</p>
