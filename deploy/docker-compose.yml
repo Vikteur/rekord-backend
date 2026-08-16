@@ -34,8 +34,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    # env_file, not `environment:` — the bcrypt hash is full of $ characters
-    # and must reach Caddy untouched.
     env_file:
       - .env
     volumes:

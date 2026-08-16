@@ -47,7 +47,7 @@ npm start          # → open http://127.0.0.1:8000
 
 Both need the venv active (the server runs via `python -m ...`). The server binds to `127.0.0.1` only — it can read your local folders, so never expose it on a network.
 
-**The DJ app has no login.** No account, no sign-in, no Spotify authentication — open `/` and you are straight in. The only gated route is `/g/<token>`, the magic link you hand to a couple or their guests for the wedding intake; a token there is what a guest gets, not something you need.
+**Three kinds of people, three kinds of access.** The **admin** (one account, bootstrapped from `ADMIN_USERNAME`/`ADMIN_PASSWORD` or `python -m server.create_user`) sees everything and is the only one who creates accounts. Each **DJ** signs in with a login the admin handed them and sees only their own couples and their own libraries. **Couples and their friends never sign in** — their `/g/<token>` magic link is their key, and the couple can share the friends link as a QR code so picks land straight in the right DJ's intake.
 
 So if `/` asks you to sign in, you are looking at a *different program*. The usual cause is something else already sitting on port 8000 (Docker dashboards, other dev servers and admin panels all like that port), so your browser shows you *its* page instead. The app now refuses to start in that case and says so; to move it out of the way:
 
@@ -128,7 +128,7 @@ or in `data/spotify_credentials.json`:
 
 Without credentials the intake still works — song fields simply save whatever guests type, flagged "as typed", and you resolve them at matching time. Songs not on Spotify always have that same free-text fallback.
 
-Guests reach the app at `http://<your-host>/g/<token>`, served by the same server (`npm run build` + `npm start`). The server binds to `127.0.0.1` by default; to let a couple answer from home you need to expose it deliberately (a tunnel like `cloudflared`/`ngrok`, or a small VPS) — the magic-link tokens are the only access control, so use HTTPS.
+Guests reach the app at `http://<your-host>/g/<token>`, served by the same server (`npm run build` + `npm start`). The server binds to `127.0.0.1` by default; to let a couple answer from home you need to expose it deliberately (a tunnel like `cloudflared`/`ngrok`, or a small VPS). The DJ side is behind the app's own login, and the magic-link tokens gate the guest side — use HTTPS so neither travels in the clear.
 
 ```bash
 node scripts/couple-intake-check.mjs   # end-to-end check: walks the whole intake in a real browser

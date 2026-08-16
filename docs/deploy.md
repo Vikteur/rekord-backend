@@ -79,70 +79,63 @@ leave the rest alone.
 
 `46.224.211.159` already serves `viktorvansteenweghen.com` through system
 nginx on 80/443, so the bundled Caddy stays **off** — it would fail to bind.
-Leave `COMPOSE_PROFILES` commented and use `deploy/nginx/rekord.conf` instead:
-same allow-list, nginx syntax.
+Leave `COMPOSE_PROFILES` commented and use `deploy/nginx/rekord.conf`: it
+only terminates TLS and forwards — the app does its own login now, so there
+is no htpasswd file any more (remove `/etc/nginx/.htpasswd-rekord` if it's
+still around).
 
 ```bash
 scp deploy/nginx/rekord.conf root@SERVER:/etc/nginx/sites-available/rekord
 ssh root@SERVER "ln -sfn /etc/nginx/sites-available/rekord /etc/nginx/sites-enabled/rekord && nginx -t && systemctl reload nginx"
 ```
 
-The password file is nginx's own format, not Caddy's bcrypt:
-
-```bash
-ssh root@SERVER "printf 'dj:%s\n' \"\$(openssl passwd -apr1 'your-password')\" > /etc/nginx/.htpasswd-rekord
-                 chmod 640 /etc/nginx/.htpasswd-rekord && chown root:www-data /etc/nginx/.htpasswd-rekord"
-```
-
 Note `nginx -t` before every reload — a bad config fails the test and leaves
 the running nginx untouched, so the other sites on the box stay up.
 
-### 5b. TLS and the DJ password (bundled Caddy)
+### 5b. TLS via the bundled Caddy
 
 Uncomment `COMPOSE_PROFILES=proxy` and `APP_DOMAIN` in `.env` to use the
 bundled Caddy — it gets a Let's Encrypt cert on first boot, provided the A
 record already points at the box. Already running nginx or Traefik? Leave
-those commented, point your existing proxy at `127.0.0.1:8000`, and copy the
-auth rules below into its config.
+those commented and point your existing proxy at `127.0.0.1:8000`.
 
-Then set the password:
+### 5c. The admin account
+
+Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env` (min 8 characters). On
+first boot, if no admin exists yet, the app creates that account; changing
+the variables later does nothing on purpose. Forgot the password?
 
 ```bash
-docker run --rm caddy:2-alpine caddy hash-password --plaintext 'your-password'
+docker compose exec app python -m server.create_user viktor --reset
 ```
 
-Paste the hash into `.env` as `DJ_PASSWORD_HASH` **with every `$` doubled**
-(`$2a$14$...` → `$$2a$$14$$...`). Compose interpolates the env file, so a single
-`$` is swallowed and the login fails with no useful error.
+DJ accounts are made by the admin inside the app (sidebar → **DJ accounts**)
+or with the same CLI. Couples can also be created from the shell:
+
+```bash
+docker compose exec app python -m server.create_couple "Sofie & Jan" 2026-05-25 --dj sarah
+```
 
 Then merge to `main`.
 
 ## Who can reach what
 
-The app has no login of its own — it was written as a single-user local tool,
-and `_couple_detail` (`server/couples_api.py:91`) returns both magic-link
-tokens for a couple to anyone who asks. Couple IDs are sequential integers, so
-on a public domain that is an open door: enumerate `/api/couples`, read every
-token, `DELETE` any couple. Caddy closes it.
+The app enforces its own access (`server/auth.py` / `server/auth_api.py`):
+every `/api` route requires a session cookie except `/api/health` (uptime
+monitoring, returns only `{"ok":true}`), `/api/auth/login`/`logout`, and the
+`/api/guest/*` routes, where the magic-link token in the path *is* the auth.
+A route-walk test (`tests/test_auth.py`) fails the build if a future route
+forgets its guard. The static bundle and `/g/*` pages are public — they show
+nothing without a session or token.
 
-Open, no password — a guest on their phone needs these:
+Roles: the **admin** sees every DJ's couples and libraries and is the only
+one who manages accounts; a **DJ** sees only their own; **couples/friends**
+only ever hold a magic link.
 
-| Path | Why |
-|---|---|
-| `/g/*` | the magic-link page |
-| `/api/guest/*` | guest API — the token in the path *is* the auth |
-| `/assets/*` | the JS/CSS bundle the page loads |
-| `/api/health` | uptime monitoring; returns only `{"ok":true}` |
-
-Everything else — the DJ UI, `/api/couples`, `/api/library`, `/api/scan`,
-`/api/match`, `/api/export`, `/api/preferences` — returns **401** without the
-password.
-
-`/g/*` also gets `Referrer-Policy: no-referrer`, so a guest tapping through to
-Spotify can't leak their magic link in a `Referer` header.
-
-Verified against the real containers: every DJ route 401s unauthenticated,
-every guest route serves, and the password lets the DJ UI through.
+`/g/*` also gets `Referrer-Policy: no-referrer` at the proxy, so a guest
+tapping through to Spotify can't leak their magic link in a `Referer` header.
+The proxy must pass `X-Forwarded-Proto` (both shipped configs do) — the app
+marks its session cookie `Secure` only when it sees https there.
 
 ## Day-to-day
 
