@@ -1,0 +1,33 @@
+# guard-generated.globs — paths a fail-closed preToolUse hook forbids hand-editing (constitution P4).
+#
+# CONSUMER-OWNED. Every line here is yours; a framework upgrade must never overwrite this file, which
+# is also why the hook's own self-protection is NOT here — `.claude/hooks/*` is denied by a built-in
+# rule in `scripts/guard-generated.sh` instead, so it reaches every consumer including the ones that
+# never create this file. See the "Rule 1" block there.
+#
+# One glob per line. `*` spans `/` (bash [[ ]] semantics, so `libs/api/src/*` matches any depth).
+# Lines starting with `#` are comments; blank lines are ignored. `guard-generated.sh` DENIES a
+# Write/Edit whose target path matches any active glob.
+#
+# The framework ships this EMPTY (every example commented) — the P4 guard is inert until a consumer
+# repo uncomments/sets its own generated paths. Enable per repo:
+#
+# Typical Java/Gradle setup (adjust to your repo). Written build-anchored rather than as a bare
+# `*/generated/*`, so a real source package that happens to be named `generated` is not caught.
+#
+#   OpenAPI server stubs + DTOs generated into <module>/build/generated. Regenerate by editing the
+#   spec in the contract repo and re-running the build, never by editing the output.
+*/build/generated/*
+build/generated/*
+#
+#   XJC / JAXB types compiled from XSD + WSDL into <module>/build/generated-sources. Same
+#   contract-first argument: the XSD/WSDL is the source.
+*/build/generated-sources/*
+build/generated-sources/*
+
+# Other examples, left commented:
+#   Frontend — a generated OpenAPI client (e.g. ng-openapi-gen):
+# libs/api/src/*
+#
+#   Contract repo — generated artefacts, if any:
+# gen/*

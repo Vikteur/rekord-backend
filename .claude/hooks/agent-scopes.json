@@ -1,0 +1,214 @@
+{
+  "_comment": "Per-agent write/command fences, ported from the Copilot agents' allowedFilePaths/commandAllowlist. Enforced by scripts/scope-guard.sh (PreToolUse). allowedFilePaths absent = any path; [] = no writes. Entry ending in '/' = directory prefix; otherwise exact path or bash glob. commandAllowlist = allowed command prefixes.",
+  "agents": {
+    "analyst": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": []
+    },
+    "architecture-analyst": {
+      "allowedFilePaths": [
+        "docs/_inventory/20-architecture-analyst.md",
+        "docs/layer-model.md"
+      ],
+      "commandAllowlist": []
+    },
+    "build-ci-analyst": {
+      "allowedFilePaths": [
+        "docs/_inventory/50-build-ci-analyst.md",
+        "docs/workflow.new-feature.md"
+      ],
+      "commandAllowlist": []
+    },
+    "capability-mapper": {
+      "allowedFilePaths": [
+        "docs/_inventory/60-capability-mapper.md",
+        "docs/capability-register.backend.md",
+        "docs/capability-register.frontend.md"
+      ],
+      "commandAllowlist": []
+    },
+    "closeout": {
+      "allowedFilePaths": [
+        "docs/",
+        "CHANGELOG.md"
+      ],
+      "commandAllowlist": [
+        "scripts/cleanup-parts.sh",
+        "git status",
+        "git log",
+        "git branch",
+        "gh pr view",
+        "git diff"
+      ]
+    },
+    "contract-agent": {
+      "allowedFilePaths": [
+        "openapi.yaml",
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "git add",
+        "git commit",
+        "git push",
+        "git status",
+        "git diff",
+        "npx spectral",
+        "scripts/open-pr.sh",
+        "scripts/contract-slice.sh"
+      ]
+    },
+    "debugger": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "git log",
+        "git diff",
+        "git status",
+        "git blame",
+        "git bisect",
+        "gh run view",
+        "gh run download"
+      ]
+    },
+    "dependency-integration-analyst": {
+      "allowedFilePaths": [
+        "docs/_inventory/70-dependency-integration-analyst.md"
+      ],
+      "commandAllowlist": []
+    },
+    "design-critic": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": []
+    },
+    "developer": {
+      "commandAllowlist": [
+        "git add",
+        "git commit",
+        "git push",
+        "git status",
+        "git diff",
+        "git log",
+        "./gradlew",
+        "npm",
+        "scripts/worktree-consumer.sh",
+        "gh run view"
+      ]
+    },
+    "onboarding-orchestrator": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "scripts/scope-skills.sh",
+        "scripts/check-inventory.sh",
+        "scripts/assemble-inventory.sh",
+        "git status",
+        "git log"
+      ]
+    },
+    "orchestrator": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "scripts/worktree-part.sh",
+        "scripts/worktree-consumer.sh",
+        "scripts/plan-slice.sh",
+        "scripts/contract-slice.sh",
+        "scripts/resolve-modules.sh",
+        "scripts/gen-capability-register.sh",
+        "scripts/scope-skills.sh",
+        "scripts/integrate-part.sh",
+        "scripts/cleanup-parts.sh",
+        "scripts/check-handoff.sh",
+        "scripts/open-pr.sh",
+        "scripts/start-feature.sh",
+        "scripts/apm.sh",
+        "git status",
+        "git log",
+        "git branch",
+        "gh run view",
+        "gh pr view",
+        "git diff"
+      ]
+    },
+    "pattern-scanner": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "scripts/scan-patterns.sh",
+        "git log",
+        "git rev-parse"
+      ]
+    },
+    "repo-structure-analyst": {
+      "allowedFilePaths": [
+        "docs/_inventory/10-repo-structure-analyst.md",
+        "docs/project-profile.md"
+      ],
+      "commandAllowlist": []
+    },
+    "retro": {
+      "allowedFilePaths": [
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "scripts/propose-upstream.sh",
+        "git log",
+        "git status",
+        "git diff"
+      ]
+    },
+    "reviewer": {
+      "allowedFilePaths": [],
+      "commandAllowlist": [
+        "git diff",
+        "git status",
+        "gh run view"
+      ]
+    },
+    "skill-author": {
+      "allowedFilePaths": [
+        "skills/",
+        "templates/skills.manifest.yaml",
+        "docs/",
+        ".claude/skills/"
+      ],
+      "commandAllowlist": []
+    },
+    "stack-analyst": {
+      "allowedFilePaths": [
+        "docs/_inventory/30-stack-analyst.md",
+        "docs/code-maps/README.md"
+      ],
+      "commandAllowlist": []
+    },
+    "test-architecture-analyst": {
+      "allowedFilePaths": [
+        "docs/_inventory/40-test-architecture-analyst.md"
+      ],
+      "commandAllowlist": []
+    },
+    "test-writer": {
+      "allowedFilePaths": [
+        "*/src/test/*",
+        "*/test/*",
+        "docs/"
+      ],
+      "commandAllowlist": [
+        "git add",
+        "git commit",
+        "git push",
+        "git status",
+        "git diff",
+        "gh run view"
+      ]
+    }
+  }
+}

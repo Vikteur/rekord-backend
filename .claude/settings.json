@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh sessionStart; else exit 0; fi", "timeout": 10 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh userPrompt; else exit 0; fi", "timeout": 10 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/guard-generated.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/guard-generated.sh PreToolUse; else exit 0; fi", "timeout": 60 },
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/scope-guard.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/scope-guard.sh PreToolUse; else exit 0; fi", "timeout": 60 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh postToolUse; else exit 0; fi", "timeout": 10 }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh postToolUseFailure; else exit 0; fi", "timeout": 10 }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh subagentStart; else exit 0; fi", "timeout": 10 }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh subagentStop; else exit 0; fi", "timeout": 10 },
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/arch-fitness.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/arch-fitness.sh; else exit 0; fi", "timeout": 600 },
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/verify-claims.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/verify-claims.sh; else exit 0; fi", "timeout": 60 }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "if [ -f \"$CLAUDE_PROJECT_DIR/.claude/hooks/scripts/audit-log.sh\" ]; then cd \"$CLAUDE_PROJECT_DIR/.claude/hooks\" && exec bash scripts/audit-log.sh sessionEnd; else exit 0; fi", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}
