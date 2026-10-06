@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from server import couples, db
@@ -22,6 +21,7 @@ from server.export.rekordbox_xml import (
     build_rekordbox_folder_xml,
     build_rekordbox_xml,
 )
+from server.export.skipped import build_skipped_txt
 from server.library import LIBRARY
 from server.matcher.index import LibraryIndex
 from server.matcher.match import match_playlist
@@ -491,6 +491,28 @@ def export(request: ExportRequest) -> Response:
     )
 
 
+@app.get("/api/export/skipped")
+def export_skipped() -> Response:
+    """What the last scan could not use: DRM-locked and unreadable files."""
+    status = SCANNER.status()
+    scanned = status.get("scanned") or {}
+    errors = status.get("errors") or []
+    drm_files = scanned.get("skipped_drm_files") or []
+    drm_total = scanned.get("skipped_drm", 0)
+    if not drm_files and not errors:
+        raise _error(
+            400, "NOTHING_SKIPPED", "The last scan skipped nothing — there's no list."
+        )
+    content = build_skipped_txt(
+        scanned.get("folder", "(unknown folder)"), drm_files, drm_total, errors
+    )
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="skipped files.txt"'},
+    )
+
+
 @app.post("/api/export/missing")
 def export_missing(request: MissingExportRequest) -> Response:
     """The playlist's tracks that this library doesn't have — a shopping list."""
@@ -650,20 +672,7 @@ def couple_export_missing(couple_id: int) -> Response:
 # Couple intake + guest magic-link routes.
 app.include_router(couples_router)
 
-# When the client has been built (npm run build), serve it so the whole app
-# runs from uvicorn alone. Mounted last so /api routes take precedence.
-DIST = Path(__file__).resolve().parent.parent / "dist"
-
-
-@app.get("/g/{token}")
-def guest_page(token: str) -> Response:
-    """Serve the SPA for magic links; the client reads the token from the URL."""
-    del token
-    index = DIST / "index.html"
-    if not index.is_file():
-        raise _error(503, "NO_BUILD", "Run `npm run build` first (or open the vite dev URL).")
-    return FileResponse(index)
-
-
-if DIST.is_dir():
-    app.mount("/", StaticFiles(directory=DIST, html=True), name="static")
+# This app is the API and nothing else. The two front-ends are their own
+# repos and their own containers — Vikteur/rekord-dj serves "/" and
+# Vikteur/rekord-couple serves the /g/<token> magic links — and the proxy in
+# deploy/nginx/rekord.conf routes /api here.
